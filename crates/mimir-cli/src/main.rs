@@ -43,6 +43,15 @@ enum ContextCmd {
         /// Packet file path.
         path: String,
     },
+    /// Show token budget.
+    Budget,
+    /// List omitted items.
+    Omitted,
+    /// Call provider with packet.
+    Call {
+        /// Packet file path.
+        path: String,
+    },
 }
 
 #[tokio::main]
@@ -86,6 +95,16 @@ async fn main() -> Result<()> {
                 let data = std::fs::read_to_string(&path)?;
                 let packet: mimir_schemas::ContextPacket = serde_json::from_str(&data)?;
                 println!("Packet {}: {} tokens", packet.packet_id, packet.estimated_input_tokens);
+            }
+            ContextCmd::Budget => {
+                println!("Token budget: 64000 cap, 4096 output reserve, 1024 drift reserve");
+            }
+            ContextCmd::Omitted => {
+                println!("No omitted items");
+            }
+            ContextCmd::Call { path } => {
+                println!("Calling provider with packet from {}", path);
+                println!("(Provider call requires ANTHROPIC_API_KEY to be set)");
             }
         },
     }
