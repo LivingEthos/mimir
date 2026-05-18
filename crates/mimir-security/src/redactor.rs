@@ -14,7 +14,7 @@ pub struct Pattern {
 /// Built-in secret patterns.
 pub const PATTERNS: &[Pattern] = &[
     Pattern { name: "AWS_KEY", regex: r"AKIA[0-9A-Z]{16}" },
-    Pattern { name: "GCP_KEY", regex: r"AIza[0-9A-Za-z\\-_]{35}" },
+    Pattern { name: "GCP_KEY", regex: r"AIza[0-9A-Za-z\-_]{35}" },
     Pattern { name: "AZURE_SAS", regex: r"sig=[A-Za-z0-9%]+" },
     Pattern { name: "ANTHROPIC_KEY", regex: r"sk-ant-[a-zA-Z0-9-]+" },
     Pattern { name: "OPENAI_KEY", regex: r"sk-[a-zA-Z0-9]{48}" },
@@ -65,9 +65,9 @@ mod tests {
 
     #[test]
     fn test_gcp_key() {
-        let text = "AIzaSyDdI0hCZtE6vySjMmWEfRq3CPzqKqqsHI";
+        let text = "AIzaSyB-1I2j3k4l5m6n7o8p9q0r1s2t3u4v5w6";
         let redacted = redact_secrets(text);
-        assert!(!redacted.contains("AIzaSyDdI0hCZtE6vySjMmWEfRq3CPzqKqqsHI"));
+        assert!(!redacted.contains("AIzaSyB-1I2j3k4l5m6n7o8p9q0r1s2t3u4v5w6"));
         assert!(redacted.contains("<REDACTED:GCP_KEY>"));
     }
 

@@ -47,6 +47,13 @@ enum ContextCmd {
     Budget,
     /// List omitted items.
     Omitted,
+    /// Explain why a file was included or omitted.
+    Why {
+        /// File path to look up.
+        path: String,
+        /// Run ID.
+        run_id: String,
+    },
     /// Call provider with packet.
     Call {
         /// Packet file path.
@@ -101,6 +108,22 @@ async fn main() -> Result<()> {
             }
             ContextCmd::Omitted => {
                 println!("No omitted items");
+            }
+            ContextCmd::Why { path, run_id } => {
+                match mimir_context::context_why(&path, &run_id) {
+                    Ok(mimir_context::WhyResult::Included { reason_code, token_count }) => {
+                        println!("Included: {} (reason: {}, tokens: {})", path, reason_code, token_count);
+                    }
+                    Ok(mimir_context::WhyResult::Omitted { reason, token_count }) => {
+                        println!("Omitted: {} (reason: {}, tokens: {})", path, reason, token_count);
+                    }
+                    Ok(mimir_context::WhyResult::NotFound) => {
+                        println!("not found");
+                    }
+                    Err(e) => {
+                        println!("Error: {}", e);
+                    }
+                }
             }
             ContextCmd::Call { path } => {
                 println!("Calling provider with packet from {}", path);

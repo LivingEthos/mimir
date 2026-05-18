@@ -10,6 +10,14 @@ repository.workspace = true
 [dependencies]
 mimir-index = { path = "../mimir-index" }
 mimir-runs = { path = "../mimir-runs" }
+mimir-schemas = { path = "../mimir-schemas" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+regex = { workspace = true }
+once_cell = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

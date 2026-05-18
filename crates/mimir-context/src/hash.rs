@@ -47,6 +47,7 @@ mod tests {
             count_provenance: "local".to_string(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
             authoritative_input_tokens: Some(1200),
+            recall_guard_flags: vec![],
         };
         let h1 = hash_packet(&packet);
         let h2 = hash_packet(&packet);
@@ -81,6 +82,7 @@ mod tests {
             count_provenance: "local".to_string(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
             authoritative_input_tokens: Some(99),
+            recall_guard_flags: vec![],
         };
         let mut p2 = p1.clone();
         p2.packet_hash = "b".to_string();

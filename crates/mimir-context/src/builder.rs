@@ -70,6 +70,7 @@ impl ContextBuilder {
             count_provenance: "local".to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
             authoritative_input_tokens: None,
+            recall_guard_flags: vec![],
         };
         Ok(packet)
     }

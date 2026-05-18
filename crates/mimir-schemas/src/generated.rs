@@ -37,6 +37,23 @@ pub struct ContextPacket {
     pub count_provenance: String,
     pub created_at: String,
     pub authoritative_input_tokens: Option<u32>,
+    /// High-risk omissions flagged by the recall guard (Stage 7).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recall_guard_flags: Vec<RecallGuardFlag>,
+}
+
+/// A recall guard flag indicating a high-risk omission.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecallGuardFlag {
+    /// Risk category.
+    pub risk: String,
+    /// Path of the omitted or at-risk file.
+    pub path: String,
+    /// Human-readable reason for the flag.
+    pub reason: String,
+    /// Suggested remediation action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
 }
 
 /// An included context item.
