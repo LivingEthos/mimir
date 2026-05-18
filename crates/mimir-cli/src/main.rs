@@ -74,6 +74,16 @@ enum Commands {
         #[arg(long)]
         checks: bool,
     },
+    /// Run a subagent.
+    Agent {
+        /// Subagent name.
+        name: String,
+        /// Query to send.
+        query: String,
+        /// Show available subagents.
+        #[arg(long)]
+        list: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -282,6 +292,34 @@ fn main() -> Result<()> {
                 }
                 Err(e) => {
                     println!("Error: {}", e);
+                }
+            }
+        }
+        Commands::Agent { name, query, list } => {
+            if list {
+                let registry = mimir_subagents::subagents::SubagentRegistry::new();
+                println!("Available subagents:");
+                for agent in registry.list() {
+                    println!(
+                        "  {:20} | {:10} | {}",
+                        agent.name, agent.cost_tier, agent.description
+                    );
+                }
+            } else {
+                println!("Running subagent '{}' with query: {}", name, query);
+                match mimir_subagents::subagents::execute_stub(
+                    &name, &query, None
+                ) {
+                    Ok(evidence) => {
+                        println!("Subagent: {}", evidence.subagent);
+                        println!("Findings: {}", evidence.findings.join("\n  - "));
+                        println!("Paths: {:?}", evidence.relevant_paths);
+                        println!("Confidence: {:.0}%", evidence.confidence * 100.0);
+                        println!("Cost: ${:.4}", evidence.cost_usd);
+                    }
+                    Err(e) => {
+                        println!("Error: {}", e);
+                    }
                 }
             }
         }

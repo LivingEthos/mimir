@@ -26,6 +26,7 @@ mimir-memory = { path = "../mimir-memory" }
 mimir-eval = { path = "../mimir-eval" }
 mimir-edit = { path = "../mimir-edit" }
 mimir-review = { path = "../mimir-review" }
+mimir-subagents = { path = "../mimir-subagents" }
 clap = { version = "4", features = ["derive"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

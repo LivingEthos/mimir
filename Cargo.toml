@@ -6,6 +6,7 @@ members = [
     "crates/mimir-context",
     "crates/mimir-edit",
     "crates/mimir-review",
+    "crates/mimir-subagents",
     "crates/mimir-retrieval",
     "crates/mimir-index",
     "crates/mimir-providers",
