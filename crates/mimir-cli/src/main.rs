@@ -37,6 +37,31 @@ enum Commands {
         #[command(subcommand)]
         cmd: ContextCmd,
     },
+    /// Plan a task (generate PatchPlan without applying).
+    Plan {
+        /// Task description.
+        task: String,
+        /// Paths the model is allowed to edit.
+        #[arg(short, long)]
+        editable: Vec<String>,
+    },
+    /// Execute a task (plan + apply + test + repair loop).
+    Code {
+        /// Task description.
+        task: String,
+        /// Paths the model is allowed to edit.
+        #[arg(short, long)]
+        editable: Vec<String>,
+        /// Max repair turns.
+        #[arg(long, default_value = "3")]
+        max_repair_turns: u32,
+        /// Cost cap in dollars.
+        #[arg(long, default_value = "5.0")]
+        cost_cap: f64,
+        /// Skip tests after applying.
+        #[arg(long)]
+        no_test: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -191,6 +216,27 @@ async fn main() -> Result<()> {
                 println!("  (Provider call requires ANTHROPIC_API_KEY to be set)");
             }
         },
+        Commands::Plan { task, editable } => {
+            println!("Planning task: {}", task);
+            println!("Editable set: {:?}", editable);
+            println!("(Plan generation requires provider API key)");
+            println!("Output: PatchPlan JSON would be written to .mimir/runs/<run_id>/plan.json");
+        }
+        Commands::Code {
+            task,
+            editable,
+            max_repair_turns,
+            cost_cap,
+            no_test,
+        } => {
+            println!("Executing task: {}", task);
+            println!("Editable set: {:?}", editable);
+            println!("Max repair turns: {}", max_repair_turns);
+            println!("Cost cap: ${}", cost_cap);
+            println!("Run tests: {}", !no_test);
+            println!("(Code execution requires provider API key)");
+            println!("Output: results written to .mimir/runs/<run_id>/");
+        }
     }
 
     Ok(())

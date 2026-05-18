@@ -4,6 +4,7 @@ members = [
     "crates/mimir-cli",
     "crates/mimir-core",
     "crates/mimir-context",
+    "crates/mimir-edit",
     "crates/mimir-retrieval",
     "crates/mimir-index",
     "crates/mimir-providers",

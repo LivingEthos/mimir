@@ -1,0 +1,23 @@
+[package]
+name = "mimir-edit"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+mimir-schemas = { path = "../mimir-schemas" }
+mimir-runs = { path = "../mimir-runs" }
+mimir-security = { path = "../mimir-security" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+camino = { workspace = true }
+regex = { workspace = true }
+similar = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

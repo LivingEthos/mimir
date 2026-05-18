@@ -224,10 +224,52 @@ pub struct PatchPlan {
 
 /// A single patch step.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PatchStep {
-    pub action: String,
-    pub path: String,
-    pub content: Option<String>,
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum PatchStep {
+    /// Replace a line range with new content.
+    LineRange {
+        /// Target file path.
+        path: String,
+        /// 1-based start line (inclusive).
+        start_line: usize,
+        /// 1-based end line (inclusive).
+        end_line: usize,
+        /// Replacement content.
+        content: String,
+    },
+    /// Apply a unified diff.
+    UnifiedDiff {
+        /// Target file path.
+        path: String,
+        /// Diff text in unified diff format.
+        diff: String,
+    },
+    /// Write entire file content.
+    WholeFile {
+        /// Target file path.
+        path: String,
+        /// Full file content.
+        content: String,
+    },
+    /// Create a new file.
+    Create {
+        /// Target file path.
+        path: String,
+        /// File content.
+        content: String,
+    },
+    /// Delete a file.
+    Delete {
+        /// Target file path.
+        path: String,
+    },
+    /// Move/rename a file.
+    Move {
+        /// Source path.
+        from: String,
+        /// Destination path.
+        to: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
