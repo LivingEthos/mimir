@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "path": "src/auth/legacy/old-session.ts",
+  "ranges": [
+    { "start": 1, "end": 80 }
+  ],
+  "candidate_kind": "symbol_slice",
+  "reason_code": "symbol_definition",
+  "score": 4.2,
+  "features": {
+    "symbol_reference_match": 0.4,
+    "caller_callee_distance_inverse": 0.2
+  },
+  "estimated_tokens": 2400,
+  "discovered_by": ["ast", "rg"],
+  "reason_for_omission": "lower_relevance_score",
+  "risk": null,
+  "what_would_trigger_inclusion": "If validateSession was reintroduced into this legacy file or the failing test mentioned old-session."
+}

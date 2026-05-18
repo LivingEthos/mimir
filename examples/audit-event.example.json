@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "event_id": "evt-01941a8e-3a",
+  "kind": "override_granted",
+  "at": "2026-05-18T14:30:14Z",
+  "run_id": "20260518-141522-a3f9b2c1",
+  "actor": "user",
+  "subject": "ovr-1",
+  "details": {
+    "requested_cap": 128000,
+    "mode": "read_only",
+    "reason": "Need to compare the migration scripts...",
+    "alternatives_attempted": ["subagent_summary", "symbol_slicing"]
+  }
+}

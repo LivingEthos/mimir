@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimir.dev/schemas/ToolResultCard.schema.json",
+  "title": "ToolResultCard",
+  "description": "Structured replacement for raw command output. The card enters the packet; the raw output is stored as an artifact under .mimir/runs/<run_id>/artifacts/.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "card_id",
+    "command",
+    "cwd",
+    "safety_class",
+    "timeout_ms",
+    "exit_code",
+    "duration_ms",
+    "stdout_preview",
+    "stderr_preview",
+    "estimated_tokens",
+    "inclusion_policy"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "card_id": { "type": "string" },
+    "command": { "type": "string" },
+    "cwd": { "type": "string" },
+    "safety_class": { "type": "string", "enum": ["READ", "LOCAL_VERIFY", "MUTATE", "DANGEROUS"] },
+    "timeout_ms": { "type": "integer", "minimum": 0 },
+    "exit_code": { "type": "integer" },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "stdout_preview": { "type": "string", "description": "Capped, filtered preview." },
+    "stderr_preview": { "type": "string" },
+    "stdout_artifact_path": { "type": ["string", "null"], "description": "Path under .mimir/runs/<run_id>/artifacts/ for the full stdout." },
+    "stderr_artifact_path": { "type": ["string", "null"] },
+    "stdout_original_size_bytes": { "type": "integer", "minimum": 0 },
+    "stderr_original_size_bytes": { "type": "integer", "minimum": 0 },
+    "detected_file_refs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "File paths detected in the output that may be relevant for follow-up retrieval."
+    },
+    "detected_test_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "estimated_tokens": { "type": "integer", "minimum": 0 },
+    "inclusion_policy": {
+      "type": "string",
+      "enum": ["always_full", "preview_only", "summary_only", "exclude_from_packet"]
+    },
+    "filters_applied": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Names of declarative filters that ran on this output."
+    }
+  },
+  "additionalProperties": false
+}

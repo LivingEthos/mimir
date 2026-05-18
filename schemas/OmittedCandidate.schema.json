@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimir.dev/schemas/OmittedCandidate.schema.json",
+  "title": "OmittedCandidate",
+  "description": "A ContextCandidate that did not make it into the packet. Recording these is mandatory: a clean packet that omits required evidence is worse than a slightly larger packet that preserves the decisive dependency.",
+  "type": "object",
+  "allOf": [
+    { "$ref": "https://mimir.dev/schemas/ContextCandidate.schema.json#/$defs/ContextCandidateBase" },
+    {
+      "type": "object",
+      "required": ["reason_for_omission", "what_would_trigger_inclusion"],
+      "properties": {
+        "reason_for_omission": {
+          "type": "string",
+          "enum": [
+            "budget_overflow",
+            "lower_relevance_score",
+            "redundant_with_included",
+            "generated_file_policy",
+            "secret_risk",
+            "large_file_threshold",
+            "untrusted_repo_policy"
+          ]
+        },
+        "risk": {
+          "type": ["string", "null"],
+          "enum": [null, "caller_missing", "test_missing", "config_missing", "schema_missing", "import_orphan"]
+        },
+        "what_would_trigger_inclusion": {
+          "type": "string",
+          "description": "Human-readable description of what change in retrieval state would cause this candidate to be included."
+        }
+      }
+    }
+  ],
+  "unevaluatedProperties": false
+}

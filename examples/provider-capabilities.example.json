@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "provider": "anthropic",
+  "models": {
+    "claude-sonnet-4-6": {
+      "max_context_tokens": 1000000,
+      "max_input_tokens": 992000,
+      "max_output_tokens": 8192,
+      "output_reserve_tokens": 8192,
+      "counts_system_tokens": true,
+      "counts_tool_schemas": true,
+      "counts_tool_results": true,
+      "counts_reasoning_tokens": false,
+      "supports_server_token_count": true,
+      "supports_prompt_cache": true,
+      "overflow_behavior": "validation_error",
+      "pricing": {
+        "input_per_million": 3.0,
+        "output_per_million": 15.0,
+        "cache_write_per_million": 3.75,
+        "cache_read_per_million": 0.3
+      },
+      "count_drift_p50_observed": 0.0102,
+      "count_drift_p95_observed": 0.0184,
+      "count_drift_p99_observed": 0.0241,
+      "drift_calibrated_at": "2026-05-18T13:00:00Z",
+      "recommended_cap_tokens": 65536
+    }
+  }
+}

@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "packet_id": "01941a8e-2d3f-7c45-9c1f-1e23b8a8c1e7",
+  "packet_hash": "a3f9b2c14e8d1c5f6b7a8e9d0c1b2a3f4e5d6c7b8a9e0d1c2b3a4e5d6c7b8a9e",
+  "run_id": "20260518-141522-a3f9b2c1",
+  "task_card": {
+    "goal": "Fix the session refresh bug where validateSession returns stale tokens",
+    "acceptance_criteria": [
+      "validateSession returns the freshly refreshed token after expiry",
+      "tests in tests/auth/session.test.ts pass"
+    ],
+    "likely_files": ["src/auth/session.ts", "tests/auth/session.test.ts"],
+    "risk_level": "medium",
+    "expected_test_command": "pnpm test auth/session.test.ts",
+    "unknowns": [],
+    "need_for_large_context": "none",
+    "complexity": "standard"
+  },
+  "mode": "code",
+  "cap_tokens": 65536,
+  "target_tokens": 56000,
+  "output_reserve_tokens": 8192,
+  "count_drift_reserve_tokens": 1024,
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-6",
+  "capability_snapshot_ref": "capabilities/anthropic.yaml@sha256:de1f...",
+  "prompt_contract_version": 1,
+  "included": [
+    {
+      "path": "src/auth/session.ts",
+      "ranges": [{ "start": 40, "end": 140 }],
+      "candidate_kind": "symbol_slice",
+      "reason_code": "failing_test_reference",
+      "tokens": 3100,
+      "source_hash": "b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2",
+      "trust_level": "trusted",
+      "editable": true
+    },
+    {
+      "path": "tests/auth/session.test.ts",
+      "ranges": [{ "start": 1, "end": 220 }],
+      "candidate_kind": "full_file",
+      "reason_code": "failing_test_reference",
+      "tokens": 5200,
+      "source_hash": "c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3",
+      "trust_level": "trusted",
+      "editable": false
+    },
+    {
+      "path": "src/auth/index.ts",
+      "ranges": [{ "start": 1, "end": 60 }],
+      "candidate_kind": "symbol_slice",
+      "reason_code": "caller",
+      "tokens": 1400,
+      "source_hash": "d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4",
+      "trust_level": "trusted",
+      "editable": false
+    }
+  ],
+  "omitted_candidates": [
+    {
+      "schema_version": 1,
+      "path": "src/auth/legacy/old-session.ts",
+      "ranges": [{ "start": 1, "end": 80 }],
+      "candidate_kind": "symbol_slice",
+      "reason_code": "symbol_definition",
+      "score": 4.2,
+      "features": { "symbol_reference_match": 0.4, "caller_callee_distance_inverse": 0.2 },
+      "estimated_tokens": 2400,
+      "discovered_by": ["ast", "rg"],
+      "reason_for_omission": "lower_relevance_score",
+      "risk": null,
+      "what_would_trigger_inclusion": "If validateSession was reintroduced into this legacy file or the failing test mentioned old-session."
+    }
+  ],
+  "tool_schemas": [
+    { "name": "read_file_range", "tokens": 180 },
+    { "name": "apply_patch", "tokens": 240 }
+  ],
+  "evidence_cards": [
+    { "kind": "test", "path": ".mimir/runs/20260518-141522-a3f9b2c1/test_cards/test-1.json", "tokens": 320 }
+  ],
+  "memory_entries": [],
+  "budget_ledger_ref": ".mimir/runs/20260518-141522-a3f9b2c1/budget_ledger.json",
+  "override": null,
+  "estimated_input_tokens": 31440,
+  "authoritative_input_tokens": 31412,
+  "count_provenance": "server_authoritative",
+  "recall_guard_flags": [],
+  "created_at": "2026-05-18T14:15:22Z"
+}

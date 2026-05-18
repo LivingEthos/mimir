@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "card_id": "tool-1",
+  "command": "rg --type ts 'validateSession' src/",
+  "cwd": "/Users/dev/projects/example-ts-app",
+  "safety_class": "READ",
+  "timeout_ms": 5000,
+  "exit_code": 0,
+  "duration_ms": 84,
+  "stdout_preview": "src/auth/session.ts:42:export function validateSession(token: string): Session | null {\nsrc/auth/index.ts:18:  return validateSession(req.token);\ntests/auth/session.test.ts:7:describe('validateSession', () => {",
+  "stderr_preview": "",
+  "stdout_artifact_path": ".mimir/runs/20260518-141522-a3f9b2c1/artifacts/tool-1-stdout.log",
+  "stderr_artifact_path": null,
+  "stdout_original_size_bytes": 412,
+  "stderr_original_size_bytes": 0,
+  "detected_file_refs": [
+    "src/auth/session.ts",
+    "src/auth/index.ts",
+    "tests/auth/session.test.ts"
+  ],
+  "detected_test_refs": ["validateSession"],
+  "estimated_tokens": 220,
+  "inclusion_policy": "preview_only",
+  "filters_applied": []
+}

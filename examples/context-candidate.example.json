@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "path": "src/auth/session.ts",
+  "ranges": [
+    { "start": 40, "end": 140 }
+  ],
+  "candidate_kind": "symbol_slice",
+  "reason_code": "failing_test_reference",
+  "score": 12.8,
+  "features": {
+    "direct_task_match": 0.7,
+    "symbol_reference_match": 1.0,
+    "failing_test_reference": 1.0,
+    "token_cost_penalty": 0.2
+  },
+  "estimated_tokens": 3100,
+  "discovered_by": ["rg", "ast"],
+  "source_hash": "b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2"
+}

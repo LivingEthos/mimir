@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimir.dev/schemas/AuditEvent.schema.json",
+  "title": "AuditEvent",
+  "description": "Security-relevant events. Appended to .mimir/runs/<run_id>/audit.jsonl and (for cross-run events) .mimir/audit.jsonl.",
+  "type": "object",
+  "required": ["schema_version", "event_id", "kind", "at"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "event_id": { "type": "string" },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "trust_added",
+        "trust_removed",
+        "permission_allow",
+        "permission_ask_approved",
+        "permission_ask_denied",
+        "permission_denied",
+        "override_requested",
+        "override_granted",
+        "override_denied",
+        "filter_trusted",
+        "filter_untrusted",
+        "redaction_applied",
+        "provider_call",
+        "gateway_provider_quarantined",
+        "config_changed",
+        "memory_promoted",
+        "memory_revoked",
+        "drift_initialized",
+        "drift_anomaly",
+        "cost_cap_aborted",
+        "recall_guard_flagged",
+        "gateway_refused",
+        "sufficiency_check_failed",
+        "subagent_spawned",
+        "subagent_completed",
+        "schema_migration_applied"
+      ]
+    },
+    "at": { "type": "string", "format": "date-time" },
+    "run_id": { "type": ["string", "null"] },
+    "actor": { "type": "string", "enum": ["user", "agent", "auto_policy", "ci"] },
+    "subject": { "type": "string", "description": "What the event is about (path, target, provider, etc.)." },
+    "details": {
+      "type": "object",
+      "description": "Structured details specific to the event kind. Not redacted; do not put secrets here.",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

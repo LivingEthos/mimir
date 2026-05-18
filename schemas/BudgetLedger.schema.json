@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimir.dev/schemas/BudgetLedger.schema.json",
+  "title": "BudgetLedger",
+  "description": "Per-category token accounting for a ContextPacket. Each category's value is the number of input tokens that category contributed to the request.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "packet_id",
+    "categories",
+    "total",
+    "cap_tokens",
+    "target_tokens",
+    "output_reserve_tokens",
+    "count_drift_reserve_tokens",
+    "window_total_tokens",
+    "slack"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "packet_id": { "type": "string" },
+    "categories": {
+      "type": "object",
+      "properties": {
+        "system": { "type": "integer", "minimum": 0 },
+        "task": { "type": "integer", "minimum": 0 },
+        "acceptance": { "type": "integer", "minimum": 0 },
+        "rules": { "type": "integer", "minimum": 0 },
+        "memory": { "type": "integer", "minimum": 0 },
+        "repo_map": { "type": "integer", "minimum": 0 },
+        "code_ranges": { "type": "integer", "minimum": 0 },
+        "editable_files": { "type": "integer", "minimum": 0 },
+        "tests_logs": { "type": "integer", "minimum": 0 },
+        "current_diff": { "type": "integer", "minimum": 0 },
+        "tool_schemas": { "type": "integer", "minimum": 0 },
+        "tool_outputs": { "type": "integer", "minimum": 0 },
+        "subagent_summaries": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["system", "task", "acceptance", "rules", "memory", "repo_map", "code_ranges", "editable_files", "tests_logs", "current_diff", "tool_schemas", "tool_outputs", "subagent_summaries"],
+      "additionalProperties": false
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Sum of input-token categories only. Must equal ContextPacket.estimated_input_tokens."
+    },
+    "cap_tokens": { "type": "integer", "minimum": 1 },
+    "target_tokens": { "type": "integer", "minimum": 1 },
+    "output_reserve_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Reserved output window. Not included in total because it is not input context."
+    },
+    "count_drift_reserve_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Reserved slack for local-vs-server count drift. Not included in total because it is not input context."
+    },
+    "window_total_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "total + output_reserve_tokens + count_drift_reserve_tokens. Must be <= cap_tokens."
+    },
+    "slack": {
+      "type": "integer",
+      "description": "target_tokens - total. May be negative if over-target (still under cap)."
+    },
+    "cache_hits_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Tokens served from provider prompt cache (if applicable)."
+    },
+    "cache_misses_tokens": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}

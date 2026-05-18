@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "card_id": "test-1",
+  "command": "pnpm test auth/session.test.ts",
+  "framework": "vitest",
+  "passed": 5,
+  "failed": 1,
+  "skipped": 0,
+  "duration_ms": 1842,
+  "top_failure": {
+    "test_name": "validateSession returns refreshed token after expiry",
+    "message": "expected 'fresh-token-abc' but got 'stale-token-xyz'",
+    "file_path": "tests/auth/session.test.ts",
+    "line_number": 42
+  },
+  "stack_top": [
+    "at Object.<anonymous> (tests/auth/session.test.ts:42:5)",
+    "at validateSession (src/auth/session.ts:78:10)"
+  ],
+  "suspected_files": ["src/auth/session.ts"],
+  "log_artifact_path": ".mimir/runs/20260518-141522-a3f9b2c1/artifacts/test-1.log"
+}

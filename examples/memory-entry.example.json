@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "entry_id": "mem-1",
+  "kind": "error",
+  "body": "In this repo, session refresh regressions usually involve src/auth/session.ts and tests/auth/session.test.ts.",
+  "source_evidence": [
+    {
+      "kind": "run",
+      "ref": "20260518-141522-a3f9b2c1"
+    },
+    {
+      "kind": "test_card",
+      "ref": ".mimir/runs/20260518-141522-a3f9b2c1/test_cards/test-1.json"
+    }
+  ],
+  "confidence": "provisional",
+  "promotion_score": null,
+  "promotion_breakdown": null,
+  "scope": "repo_shared",
+  "safe_to_send": true,
+  "created_at": "2026-05-18T14:40:00Z",
+  "last_verified_at": null,
+  "staleness_policy": {
+    "max_age_days": 90,
+    "auto_revoke_after_failures": 2
+  },
+  "retrieval_tags": ["auth", "session", "refresh"],
+  "imported_from": null
+}

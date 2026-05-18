@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimir.dev/schemas/EvidenceSummary.schema.json",
+  "title": "EvidenceSummary",
+  "description": "Required return shape for every subagent (search, file-analyst, reviewer, test-summarizer). Subagents never return free-form prose to the supervisor; they return this structured summary with cited evidence.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "summary_id",
+    "subagent_kind",
+    "parent_run_id",
+    "task",
+    "findings",
+    "confidence",
+    "unknowns",
+    "ran_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "summary_id": { "type": "string" },
+    "subagent_kind": { "type": "string", "enum": ["search", "file_analyst_deterministic", "file_analyst_llm", "reviewer", "test_summarizer"] },
+    "parent_run_id": { "type": "string", "description": "The supervisor's run_id." },
+    "subagent_run_id": { "type": "string" },
+    "subagent_packet_id": { "type": "string" },
+    "task": { "type": "string", "description": "The bounded task the subagent was given." },
+    "files_inspected": { "type": "array", "items": { "type": "string" } },
+    "important_symbols": { "type": "array", "items": { "type": "string" } },
+    "findings": {
+      "type": "array",
+      "description": "Cited findings. Every claim has at least one file/range reference.",
+      "items": {
+        "type": "object",
+        "required": ["claim", "evidence"],
+        "properties": {
+          "claim": { "type": "string" },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["path", "ranges"],
+              "properties": {
+                "path": { "type": "string" },
+                "ranges": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["start", "end"],
+                    "properties": {
+                      "start": { "type": "integer", "minimum": 1 },
+                      "end": { "type": "integer", "minimum": 1 }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "recommended_parent_inclusions": {
+      "type": "array",
+      "description": "Files/ranges the supervisor's next packet should include.",
+      "items": {
+        "type": "object",
+        "required": ["path", "reason"],
+        "properties": {
+          "path": { "type": "string" },
+          "ranges": { "type": "array" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+    "unknowns": { "type": "array", "items": { "type": "string" } },
+    "do_not_assume": { "type": "array", "items": { "type": "string" } },
+    "ran_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}

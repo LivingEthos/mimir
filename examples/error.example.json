@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "code": "gateway_over_cap",
+  "category": "gateway",
+  "message": "Packet exceeds configured cap (estimated 67200 input tokens + 8192 output reserve + 1024 drift reserve > 65536 cap).",
+  "cause": null,
+  "retryable": false,
+  "user_visible_hint": "Reduce included ranges via `mimir context omitted <run_id>` to see what can be dropped, or run `mimir override request --cap 128k --reason \"<why>\"` if larger context is genuinely needed.",
+  "context": {
+    "packet_id": "01941a8e-2d3f-7c45-9c1f-1e23b8a8c1e7",
+    "estimated_input_tokens": 67200,
+    "cap_tokens": 65536,
+    "output_reserve_tokens": 8192,
+    "count_drift_reserve_tokens": 1024
+  }
+}

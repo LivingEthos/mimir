@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimir.dev/schemas/ContextPlan.schema.json",
+  "title": "ContextPlan",
+  "description": "The deterministic planner's intent before retrieval runs. Informational; the packer's actual ContextPacket may diverge based on what retrieval returns.",
+  "type": "object",
+  "required": ["schema_version", "plan_id", "run_id", "need_to_inspect", "do_not_load", "estimated_budget", "created_at"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "plan_id": { "type": "string" },
+    "run_id": { "type": "string" },
+    "need_to_inspect": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "reason"],
+        "properties": {
+          "path": { "type": "string" },
+          "reason": { "type": "string" },
+          "desired_ranges": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "do_not_load": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "reason"],
+        "properties": {
+          "path": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "estimated_budget": {
+      "type": "object",
+      "description": "Informational estimate per BudgetLedger category.",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}

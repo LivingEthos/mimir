@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "case_id": "ts-auth-session-stale-token",
+  "mode": "3-rank-recall",
+  "cap_tokens": 65536,
+  "model": "claude-sonnet-4-6",
+  "provider": "anthropic",
+  "metrics": {
+    "file_recall": 1.0,
+    "range_recall": 1.0,
+    "precision": 0.82,
+    "tokens_per_useful_line": 94.2,
+    "critical_omission_count": 0,
+    "cap_compliance": true,
+    "token_count_agreement_p95": 0.0184,
+    "packet_build_latency_ms": 412,
+    "retrieval_latency_ms": 190,
+    "repo_map_refresh_latency_ms": 41,
+    "e2e_latency_ms": 730,
+    "tokens_in_total": 31440,
+    "tokens_out_total": 0,
+    "cost_usd_total": 0.09432,
+    "repair_turns": 0,
+    "override_used": false,
+    "outcome": null,
+    "total_cost_to_success": null,
+    "index_cache_hit_rate": 1.0,
+    "prompt_cache_hit_rate": 0.26
+  },
+  "packet_id": "01941a8e-2d3f-7c45-9c1f-1e23b8a8c1e7",
+  "run_id": "20260518-141522-a3f9b2c1",
+  "ran_at": "2026-05-18T14:20:00Z"
+}

@@ -1,0 +1,21 @@
+[package]
+name = "mimir-index"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+mimir-schemas = { path = "../mimir-schemas" }
+mimir-runs = { path = "../mimir-runs" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+walkdir = { workspace = true }
+ignore = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+tree-sitter-javascript = { workspace = true }
+tree-sitter-python = { workspace = true }
+rayon = { workspace = true }

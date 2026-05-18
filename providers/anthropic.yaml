@@ -1,0 +1,39 @@
+schema_version: 1
+provider: anthropic
+models:
+  claude-sonnet-4-20250514:
+    max_context_tokens: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 64000
+    output_reserve_tokens: 4096
+    counts_system_tokens: true
+    counts_tool_schemas: true
+    counts_tool_results: true
+    counts_reasoning_tokens: true
+    supports_server_token_count: false
+    supports_prompt_cache: true
+    overflow_behavior: error
+    pricing:
+      input_per_million: 3.0
+      output_per_million: 15.0
+      cache_write_per_million: 3.75
+      cache_read_per_million: 0.30
+    count_drift_p95_observed: null
+  claude-opus-4-20250514:
+    max_context_tokens: 200000
+    max_input_tokens: 200000
+    max_output_tokens: 64000
+    output_reserve_tokens: 4096
+    counts_system_tokens: true
+    counts_tool_schemas: true
+    counts_tool_results: true
+    counts_reasoning_tokens: true
+    supports_server_token_count: false
+    supports_prompt_cache: true
+    overflow_behavior: error
+    pricing:
+      input_per_million: 15.0
+      output_per_million: 75.0
+      cache_write_per_million: 18.75
+      cache_read_per_million: 1.50
+    count_drift_p95_observed: null
