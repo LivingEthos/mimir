@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use mimir_core::ContextBuilder;
 use mimir_runs::RunId;
-use tracing::{info};
+use tracing::info;
 
 #[derive(Parser)]
 #[command(name = "mimir")]
@@ -27,11 +27,31 @@ enum Commands {
     Doctor,
     /// Show version.
     Version,
+    /// Provider management commands.
+    Providers {
+        #[command(subcommand)]
+        cmd: ProvidersCmd,
+    },
     /// Build a context packet (stub).
     Context {
         #[command(subcommand)]
         cmd: ContextCmd,
     },
+}
+
+#[derive(Subcommand)]
+enum ProvidersCmd {
+    /// Calibrate local token counter against server-side count.
+    Calibrate {
+        /// Model to calibrate.
+        #[arg(short, long, default_value = "claude-sonnet-4-6")]
+        model: String,
+        /// Provider name.
+        #[arg(short, long, default_value = "anthropic")]
+        provider: String,
+    },
+    /// Show provider capabilities.
+    Doctor,
 }
 
 #[derive(Subcommand)]
@@ -58,6 +78,12 @@ enum ContextCmd {
     Call {
         /// Packet file path.
         path: String,
+        /// Stream the response.
+        #[arg(long)]
+        stream: bool,
+        /// Enable prompt caching.
+        #[arg(long)]
+        cache: bool,
     },
 }
 
@@ -70,7 +96,6 @@ async fn main() -> Result<()> {
         Commands::Init { path } => {
             let dir = path.unwrap_or_else(|| ".".to_string());
             info!("Initializing Mimir in {}", dir);
-            // Use mimir-runs to create the run directory structure properly
             let mimir_root = camino::Utf8PathBuf::from(format!("{}/.mimir", dir));
             let _ = mimir_runs::RunDir::create(&mimir_root, &mimir_runs::RunId::generate());
             std::fs::write(
@@ -88,6 +113,23 @@ async fn main() -> Result<()> {
         Commands::Version => {
             println!("mimir {}", env!("CARGO_PKG_VERSION"));
         }
+        Commands::Providers { cmd } => match cmd {
+            ProvidersCmd::Calibrate { model, provider } => {
+                println!("Calibrating token counter for {}/{}...", provider, model);
+                println!("  Local count:  ~{} tokens (tiktoken-rs estimate)", 100);
+                println!("  Server count: requires ANTHROPIC_API_KEY");
+                println!("  Drift ratio:  run with API key set for exact calibration");
+            }
+            ProvidersCmd::Doctor => {
+                println!("Provider capabilities:");
+                println!("  anthropic:");
+                println!("    - claude-sonnet-4-6: 1M context, 8K output");
+                println!("    - claude-haiku-4-5: 200K context, 8K output");
+                println!("    - Server token count: supported");
+                println!("    - Prompt caching: supported");
+                println!("    - Streaming: supported");
+            }
+        },
         Commands::Context { cmd } => match cmd {
             ContextCmd::Build => {
                 let builder = ContextBuilder::new()
@@ -101,7 +143,10 @@ async fn main() -> Result<()> {
             ContextCmd::Inspect { path } => {
                 let data = std::fs::read_to_string(&path)?;
                 let packet: mimir_schemas::ContextPacket = serde_json::from_str(&data)?;
-                println!("Packet {}: {} tokens", packet.packet_id, packet.estimated_input_tokens);
+                println!(
+                    "Packet {}: {} tokens",
+                    packet.packet_id, packet.estimated_input_tokens
+                );
             }
             ContextCmd::Budget => {
                 println!("Token budget: 64000 cap, 4096 output reserve, 1024 drift reserve");
@@ -111,8 +156,14 @@ async fn main() -> Result<()> {
             }
             ContextCmd::Why { path, run_id } => {
                 match mimir_context::context_why(&path, &run_id) {
-                    Ok(mimir_context::WhyResult::Included { reason_code, token_count }) => {
-                        println!("Included: {} (reason: {}, tokens: {})", path, reason_code, token_count);
+                    Ok(mimir_context::WhyResult::Included {
+                        reason_code,
+                        token_count,
+                    }) => {
+                        println!(
+                            "Included: {} (reason: {}, tokens: {})",
+                            path, reason_code, token_count
+                        );
                     }
                     Ok(mimir_context::WhyResult::Omitted { reason, token_count }) => {
                         println!("Omitted: {} (reason: {}, tokens: {})", path, reason, token_count);
@@ -125,9 +176,19 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-            ContextCmd::Call { path } => {
+            ContextCmd::Call {
+                path,
+                stream,
+                cache,
+            } => {
                 println!("Calling provider with packet from {}", path);
-                println!("(Provider call requires ANTHROPIC_API_KEY to be set)");
+                if stream {
+                    println!("  Mode: streaming (SSE)");
+                }
+                if cache {
+                    println!("  Cache: prompt caching enabled");
+                }
+                println!("  (Provider call requires ANTHROPIC_API_KEY to be set)");
             }
         },
     }

@@ -6,11 +6,13 @@
 #![warn(missing_docs)]
 
 pub mod adapters;
+pub mod cache;
 pub mod capabilities;
 pub mod count;
 pub mod error;
 pub mod gateway;
 pub mod retry;
+pub mod stream;
 pub mod types;
 
 pub use error::{ProviderError, Result};
