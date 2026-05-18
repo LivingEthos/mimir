@@ -51,22 +51,9 @@ pub fn classify_command(cmd: &str) -> SafetyClass {
 }
 
 /// Redact known secret patterns from text.
-pub fn redact_secrets(text: &str) -> String {
-    static AWS_RE: OnceLock<Regex> = OnceLock::new();
-    static OPENAI_RE: OnceLock<Regex> = OnceLock::new();
+pub mod redactor;
 
-    let aws = AWS_RE.get_or_init(|| {
-        Regex::new(r"AKIA[0-9A-Z]{16}").expect("valid regex")
-    });
-    let openai = OPENAI_RE.get_or_init(|| {
-        Regex::new(r"sk-[a-zA-Z0-9]{48}").expect("valid regex")
-    });
-
-    let mut result = text.to_string();
-    result = aws.replace_all(&result, "[REDACTED_AWS_KEY]").to_string();
-    result = openai.replace_all(&result, "[REDACTED_OPENAI_KEY]").to_string();
-    result
-}
+pub use redactor::redact_secrets;
 
 #[cfg(test)]
 mod tests {
@@ -103,16 +90,15 @@ mod tests {
         let text = "key=AKIAIOSFODNN7EXAMPLE";
         let redacted = redact_secrets(text);
         assert!(!redacted.contains("AKIAIOSFODNN7EXAMPLE"));
-        assert!(redacted.contains("[REDACTED_AWS_KEY]"));
+        assert!(redacted.contains("<REDACTED:AWS_KEY>"));
     }
-
 
     #[test]
     fn test_redact_openai_key() {
         let text = "sk-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKL";
         let redacted = redact_secrets(text);
         assert!(!redacted.contains("sk-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKL"));
-        assert!(redacted.contains("[REDACTED_OPENAI_KEY]"));
+        assert!(redacted.contains("<REDACTED:OPENAI_KEY>"));
     }
 
     #[test]
