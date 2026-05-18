@@ -5,16 +5,17 @@ members = [
     "crates/mimir-core",
     "crates/mimir-context",
     "crates/mimir-edit",
+    "crates/mimir-review",
     "crates/mimir-retrieval",
     "crates/mimir-index",
     "crates/mimir-providers",
     "crates/mimir-tools",
+    "crates/mimir-telemetry",
     "crates/mimir-security",
     "crates/mimir-runs",
     "crates/mimir-memory",
     "crates/mimir-eval",
     "crates/mimir-schemas",
-    "crates/mimir-telemetry",
 ]
 
 [workspace.package]

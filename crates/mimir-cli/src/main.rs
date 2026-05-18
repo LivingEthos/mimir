@@ -62,6 +62,18 @@ enum Commands {
         #[arg(long)]
         no_test: bool,
     },
+    /// Review changes since a git ref.
+    Review {
+        /// Git ref to compare against (e.g. HEAD~1).
+        #[arg(long)]
+        since: Option<String>,
+        /// Run committee review with multiple reviewers.
+        #[arg(long)]
+        committee: bool,
+        /// Run source-controlled checks.
+        #[arg(long)]
+        checks: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -112,8 +124,7 @@ enum ContextCmd {
     },
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
 
@@ -236,6 +247,43 @@ async fn main() -> Result<()> {
             println!("Run tests: {}", !no_test);
             println!("(Code execution requires provider API key)");
             println!("Output: results written to .mimir/runs/<run_id>/");
+        }
+        Commands::Review { since, committee, checks } => {
+            let since_ref = since.as_deref().unwrap_or("HEAD~1");
+            println!("Reviewing changes since {}", since_ref);
+            let base = camino::Utf8Path::new(".");
+            match mimir_review::diff::diff_since(base, since_ref) {
+                Ok(diffs) => {
+                    println!("Found {} changed files", diffs.len());
+                    let uninspected = mimir_review::diff::detect_uninspected(
+                        &diffs, &std::collections::HashSet::new()
+                    );
+                    if !uninspected.is_empty() {
+                        println!("  Uninspected files: {}", uninspected.len());
+                    }
+                    let generated = mimir_review::diff::detect_generated_edits(&diffs);
+                    if !generated.is_empty() {
+                        println!("  Generated file edits: {}", generated.len());
+                        for f in &generated {
+                            println!("    ERROR: {}", f.description);
+                        }
+                    }
+                    if committee {
+                        println!("  Committee review mode enabled");
+                    }
+                    if checks {
+                        let checks = mimir_review::checks::load_checks(base);
+                        println!("  Loaded {} source-controlled checks", checks.len());
+                        let findings = mimir_review::checks::run_checks(&checks, base);
+                        if !findings.is_empty() {
+                            println!("  Check failures: {}", findings.len());
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("Error: {}", e);
+                }
+            }
         }
     }
 
