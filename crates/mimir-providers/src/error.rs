@@ -109,3 +109,65 @@ impl ProviderError {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_provider_error_new() {
+        let err = ProviderError::new("test_code", "test message");
+        assert_eq!(err.code, "test_code");
+        assert_eq!(err.message, "test message");
+        assert_eq!(err.status, None);
+        assert!(!err.retryable);
+    }
+
+    #[test]
+    fn test_provider_error_with_status() {
+        let err = ProviderError::new("not_found", "missing").with_status(404);
+        assert_eq!(err.status, Some(404));
+    }
+
+    #[test]
+    fn test_provider_error_retryable() {
+        let err = ProviderError::new("rate_limited", "slow down").retryable();
+        assert!(err.retryable);
+    }
+
+    #[test]
+    fn test_map_anthropic_error_rate_limit() {
+        let err = map_anthropic_error("rate_limit_error", "too many requests", 429);
+        assert_eq!(err.code, "provider_rate_limited");
+        assert!(err.retryable);
+        assert_eq!(err.status, Some(429));
+    }
+
+    #[test]
+    fn test_map_anthropic_error_auth() {
+        let err = map_anthropic_error("authentication_error", "bad key", 401);
+        assert_eq!(err.code, "provider_unauthorized");
+        assert!(!err.retryable);
+        assert_eq!(err.status, Some(401));
+    }
+
+    #[test]
+    fn test_map_http_status_500() {
+        let err = map_http_status(500, "server error");
+        assert_eq!(err.code, "provider_internal_error");
+        assert!(err.retryable);
+    }
+
+    #[test]
+    fn test_map_http_status_400() {
+        let err = map_http_status(400, "bad request");
+        assert_eq!(err.code, "provider_invalid_request");
+        assert!(!err.retryable);
+    }
+
+    #[test]
+    fn test_provider_error_display() {
+        let err = ProviderError::new("my_code", "my message");
+        assert_eq!(format!("{}", err), "my_code: my message");
+    }
+}

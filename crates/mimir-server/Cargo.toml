@@ -1,5 +1,5 @@
 [package]
-name = "mimir-memory"
+name = "mimir-server"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -9,16 +9,18 @@ repository.workspace = true
 
 [dependencies]
 mimir-schemas = { path = "../mimir-schemas" }
-mimir-telemetry = { path = "../mimir-telemetry" }
+mimir-core = { path = "../mimir-core" }
+mimir-providers = { path = "../mimir-providers" }
+mimir-context = { path = "../mimir-context" }
+mimir-runs = { path = "../mimir-runs" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-chrono = { workspace = true }
-rusqlite = { workspace = true }
-thiserror = { workspace = true }
-camino = { workspace = true }
+tower-lsp = { workspace = true }
 tracing = { workspace = true }
-uuid = { workspace = true }
+thiserror = { workspace = true }
+dashmap = { workspace = true }
+anyhow = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

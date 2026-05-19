@@ -1,0 +1,23 @@
+{
+  "name": "@mimir/sdk",
+  "version": "0.7.0",
+  "description": "TypeScript types for Mimir CLI schemas",
+  "types": "index.d.ts",
+  "files": [
+    "*.ts",
+    "index.d.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc --declaration --emitDeclarationOnly --outFile index.d.ts *.ts",
+    "clean": "rm -f index.d.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mimir/mimir.git"
+  }
+}

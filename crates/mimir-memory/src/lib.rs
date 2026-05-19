@@ -1,32 +1,42 @@
 //! Memory store: durable, versioned, retrievable.
+//!
+//! Provides SQLite-backed storage for memory entries with FTS5 full-text
+//! search, a Memory Decision Engine for scoring, marker-block publishing,
+//! and session importers.
 
-use mimir_schemas::MemoryEntry;
-use std::collections::HashMap;
+#![warn(missing_docs)]
 
-/// In-memory store (stub).
-#[derive(Debug, Default)]
-pub struct MemoryStore {
-    entries: HashMap<String, MemoryEntry>,
-}
+pub mod engine;
+pub mod importers;
+pub mod publish;
+pub mod store;
 
-impl MemoryStore {
-    /// Create a new store.
-    pub fn new() -> Self {
-        Self::default()
-    }
+pub use engine::{MemoryDecisionEngine, ScoreSignals, ScoreWeights};
+pub use importers::{
+    importer_for, AiderImporter, ClaudeCodeImporter, CodexImporter, OpenCodeImporter,
+    SessionImporter,
+};
+pub use publish::{clear_published, publish, read_published};
+pub use store::{AuditRecord, MemoryStore, StrategyRecord};
 
-    /// Insert an entry.
-    pub fn insert(&mut self, entry: MemoryEntry) {
-        self.entries.insert(entry.entry_id.clone(), entry);
-    }
+use thiserror::Error;
 
-    /// Get an entry by ID.
-    pub fn get(&self, id: &str) -> Option<&MemoryEntry> {
-        self.entries.get(id)
-    }
+/// Errors that can occur in the memory crate.
+#[derive(Debug, Error)]
+pub enum MemoryError {
+    /// Database operation failed.
+    #[error("database error: {0}")]
+    Database(#[from] rusqlite::Error),
 
-    /// List all entries.
-    pub fn list(&self) -> Vec<&MemoryEntry> {
-        self.entries.values().collect()
-    }
+    /// I/O operation failed.
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
+    /// Invalid path.
+    #[error("invalid path: {0}")]
+    InvalidPath(String),
+
+    /// Serialization failed.
+    #[error("serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
 }

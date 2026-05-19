@@ -17,6 +17,8 @@ members = [
     "crates/mimir-memory",
     "crates/mimir-eval",
     "crates/mimir-schemas",
+    "crates/mimir-server",
+    "crates/mimir-tui",
 ]
 
 [workspace.package]
@@ -143,3 +145,8 @@ predicates = "3"
 tempfile = "3"
 criterion = { version = "0.5", features = ["html_reports"] }
 wiremock = "0.6"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

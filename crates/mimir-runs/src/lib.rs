@@ -117,13 +117,39 @@ mod tests {
     }
 
     #[test]
-    fn atomic_write_roundtrip() {
+    fn run_id_display() {
+        let id = RunId("20260101-120000-abcdef01".to_string());
+        assert_eq!(id.to_string(), "20260101-120000-abcdef01");
+    }
+
+    #[test]
+    fn run_dir_multiple_events() {
         let tmp = camino::Utf8PathBuf::from(std::env::temp_dir().to_string_lossy().to_string());
-        let path = tmp.join("atomic-test.txt");
+        let mimir_root = tmp.join("mimir-test-multi-events");
+        let _ = fs::remove_dir_all(&mimir_root);
+        let run_id = RunId("20260101-120000-abcdef03".to_string());
+        let run_dir = RunDir::create(&mimir_root, &run_id).unwrap();
+        #[derive(Serialize)]
+        struct Ev { msg: String }
+        run_dir.append_event(&Ev { msg: "first".to_string() }).unwrap();
+        run_dir.append_event(&Ev { msg: "second".to_string() }).unwrap();
+        let contents = fs::read_to_string(run_dir.events_path()).unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("first"));
+        assert!(lines[1].contains("second"));
+        let _ = fs::remove_dir_all(&mimir_root);
+    }
+
+    #[test]
+    fn atomic_write_overwrite() {
+        let tmp = camino::Utf8PathBuf::from(std::env::temp_dir().to_string_lossy().to_string());
+        let path = tmp.join("atomic-overwrite.txt");
         let _ = fs::remove_file(&path);
-        atomic_write(&path, b"atomic data").unwrap();
+        atomic_write(&path, b"first").unwrap();
+        atomic_write(&path, b"second").unwrap();
         let contents = fs::read_to_string(&path).unwrap();
-        assert_eq!(contents, "atomic data");
+        assert_eq!(contents, "second");
         let _ = fs::remove_file(&path);
     }
 }

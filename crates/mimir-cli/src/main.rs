@@ -84,6 +84,73 @@ enum Commands {
         #[arg(long)]
         list: bool,
     },
+    /// Memory management commands (P6).
+    Memory {
+        #[command(subcommand)]
+        cmd: MemoryCmd,
+    },
+    /// Start the TUI (P6).
+    Tui {
+        /// Path to a ContextPacket JSON file to load.
+        #[arg(long)]
+        packet: Option<String>,
+        /// Path to a PipelineResult JSON file to load.
+        #[arg(long)]
+        pipeline_result: Option<String>,
+    },
+    /// Start the JSON-RPC server (P6).
+    Serve {
+        /// TCP port to bind to.
+        #[arg(short, long)]
+        port: Option<u16>,
+        /// Use stdio transport instead of TCP.
+        #[arg(long)]
+        rpc_stdio: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum MemoryCmd {
+    /// List memory entries.
+    List {
+        /// Filter by kind.
+        #[arg(short, long)]
+        kind: Option<String>,
+        /// Filter by scope.
+        #[arg(short, long)]
+        scope: Option<String>,
+        /// Filter by confidence.
+        #[arg(short, long)]
+        confidence: Option<String>,
+    },
+    /// Show a memory entry.
+    Show {
+        /// Entry ID.
+        entry_id: String,
+    },
+    /// Explain why an entry has its score.
+    Why {
+        /// Entry ID.
+        entry_id: String,
+    },
+    /// Search memory entries.
+    Search {
+        /// Query string.
+        query: String,
+    },
+    /// Publish memory to project-rules.md.
+    Publish,
+    /// Forget (delete) a memory entry.
+    Forget {
+        /// Entry ID.
+        entry_id: String,
+    },
+    /// Import sessions from other tools.
+    ImportSessions {
+        /// Source tool.
+        #[arg(short, long)]
+        from: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -322,6 +389,123 @@ fn main() -> Result<()> {
                     }
                 }
             }
+        }
+        Commands::Memory { cmd } => match cmd {
+            MemoryCmd::List {
+                kind,
+                scope,
+                confidence,
+            } => {
+                let store =
+                    mimir_memory::MemoryStore::open(".mimir/memory.db").unwrap_or_else(|e| {
+                        println!("Memory DB not initialized: {}", e);
+                        std::process::exit(1);
+                    });
+                let entries = store.list(kind.as_deref(), scope.as_deref(), confidence.as_deref())?;
+                println!("{} memory entries:", entries.len());
+                for e in entries {
+                    println!(
+                        "  {} | {} | {} | {}",
+                        e.entry_id, e.kind, e.scope, e.confidence
+                    );
+                }
+            }
+            MemoryCmd::Show { entry_id } => {
+                let store =
+                    mimir_memory::MemoryStore::open(".mimir/memory.db").unwrap_or_else(|e| {
+                        println!("Memory DB not initialized: {}", e);
+                        std::process::exit(1);
+                    });
+                match store.get(&entry_id)? {
+                    Some(e) => {
+                        println!("Entry: {}", e.entry_id);
+                        println!("  Kind: {}", e.kind);
+                        println!("  Scope: {}", e.scope);
+                        println!("  Confidence: {}", e.confidence);
+                        println!("  Safe to send: {}", e.safe_to_send);
+                        println!("  Created: {}", e.created_at);
+                        println!("  Tags: {}", e.retrieval_tags.join(", "));
+                        println!("  Body:\n{}", e.body);
+                    }
+                    None => println!("Entry not found: {}", entry_id),
+                }
+            }
+            MemoryCmd::Why { entry_id } => {
+                let store =
+                    mimir_memory::MemoryStore::open(".mimir/memory.db").unwrap_or_else(|e| {
+                        println!("Memory DB not initialized: {}", e);
+                        std::process::exit(1);
+                    });
+                match store.get(&entry_id)? {
+                    Some(e) => {
+                        let engine = mimir_memory::MemoryDecisionEngine::default();
+                        let signals = mimir_memory::ScoreSignals::default();
+                        let breakdown = engine.score(&signals);
+                        println!("Entry: {}", e.entry_id);
+                        println!("  Promotion score: {:.2}", breakdown.total);
+                        println!("  Breakdown: {:?}", breakdown);
+                    }
+                    None => println!("Entry not found: {}", entry_id),
+                }
+            }
+            MemoryCmd::Search { query } => {
+                let store =
+                    mimir_memory::MemoryStore::open(".mimir/memory.db").unwrap_or_else(|e| {
+                        println!("Memory DB not initialized: {}", e);
+                        std::process::exit(1);
+                    });
+                let entries = store.search(&query)?;
+                println!("{} results for '{}'", entries.len(), query);
+                for e in entries {
+                    println!("  {} | {} | {}", e.entry_id, e.kind, e.scope);
+                }
+            }
+            MemoryCmd::Publish => {
+                let store =
+                    mimir_memory::MemoryStore::open(".mimir/memory.db").unwrap_or_else(|e| {
+                        println!("Memory DB not initialized: {}", e);
+                        std::process::exit(1);
+                    });
+                let entries = store.list(Some("lesson"), None, Some("verified"))?;
+                let safe: Vec<_> = entries.into_iter().filter(|e| e.safe_to_send).collect();
+                mimir_memory::publish(&safe, ".mimir/project-rules.md")?;
+                println!("Published {} entries to .mimir/project-rules.md", safe.len());
+            }
+            MemoryCmd::Forget { entry_id } => {
+                let store =
+                    mimir_memory::MemoryStore::open(".mimir/memory.db").unwrap_or_else(|e| {
+                        println!("Memory DB not initialized: {}", e);
+                        std::process::exit(1);
+                    });
+                store.delete(&entry_id)?;
+                println!("Forgot entry: {}", entry_id);
+            }
+            MemoryCmd::ImportSessions { from } => {
+                println!("Importing sessions from: {}", from);
+                println!("(Session import not yet implemented for source: {})", from);
+            }
+        },
+        Commands::Tui {
+            packet,
+            pipeline_result,
+        } => {
+            println!("Starting Mimir TUI...");
+            let mut app = mimir_tui::App::new();
+            if let Some(path) = packet {
+                app.load_from_file(&path)?;
+            }
+            if let Some(path) = pipeline_result {
+                app.load_pipeline_from_file(&path)?;
+            }
+            mimir_tui::run_tui(&mut app)?;
+        }
+        Commands::Serve { port, rpc_stdio } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            let config = mimir_server::ServerConfig {
+                tcp_bind: port.map(|p| format!("127.0.0.1:{}", p)),
+                stdio: rpc_stdio,
+            };
+            rt.block_on(mimir_server::run_server(config))?;
         }
     }
 
