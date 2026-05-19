@@ -1,0 +1,4 @@
+#!/bin/sh
+# Fallback wrapper — platform-specific binary should be installed by install.js
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+"$SCRIPT_DIR/mimir" "$@"

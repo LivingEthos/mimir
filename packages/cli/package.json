@@ -1,0 +1,24 @@
+{
+  "name": "@mimir/cli",
+  "version": "1.0.0",
+  "description": "Mimir CLI — Replayable Context for coding agents",
+  "bin": {
+    "mimir": "./bin/mimir"
+  },
+  "scripts": {
+    "postinstall": "node ./install.js"
+  },
+  "optionalDependencies": {
+    "@mimir/cli-darwin-arm64": "1.0.0",
+    "@mimir/cli-darwin-x64": "1.0.0",
+    "@mimir/cli-linux-arm64": "1.0.0",
+    "@mimir/cli-linux-x64": "1.0.0",
+    "@mimir/cli-win32-x64": "1.0.0"
+  },
+  "keywords": ["cli", "ai", "context", "llm", "coding"],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mimir/mimir.git"
+  }
+}
