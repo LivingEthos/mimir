@@ -1,0 +1,10 @@
+# Fixture 7: mode2-recall-guard
+mode: 2
+description: Recall guard for high-risk omissions
+task: Ensure critical files are not omitted
+target_files:
+  - crates/mimir-retrieval/src/lib.rs
+expected_included:
+  - crates/mimir-retrieval/src/lib.rs
+expected_omitted:
+---

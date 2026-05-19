@@ -1,0 +1,12 @@
+# Fixture 9: mode2-provider-adapter
+mode: 2
+description: Provider adapter contract
+task: Check Anthropic adapter implementation
+target_files:
+  - crates/mimir-providers/src/adapters/anthropic.rs
+expected_included:
+  - crates/mimir-providers/src/adapters/anthropic.rs
+  - crates/mimir-providers/src/capabilities.rs
+expected_omitted:
+  - crates/mimir-tui/src/lib.rs
+---

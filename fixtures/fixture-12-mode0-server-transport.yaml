@@ -1,0 +1,10 @@
+# Fixture 12: mode0-server-transport
+mode: 0
+description: LSP server transport
+task: Verify tower-lsp integration
+target_files:
+  - crates/mimir-server/src/lsp.rs
+expected_included:
+  - crates/mimir-server/src/lsp.rs
+expected_omitted:
+---

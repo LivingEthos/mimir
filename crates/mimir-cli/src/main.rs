@@ -389,12 +389,90 @@ fn main() -> Result<()> {
             no_test,
         } => {
             println!("Executing task: {}", task);
-            println!("Editable set: {:?}", editable);
-            println!("Max repair turns: {}", max_repair_turns);
-            println!("Cost cap: ${}", cost_cap);
-            println!("Run tests: {}", !no_test);
-            println!("(Code execution requires provider API key)");
-            println!("Output: results written to .mimir/runs/<run_id>/");
+            let run_id = RunId::generate();
+            let mimir_root = camino::Utf8PathBuf::from(".mimir");
+            let run_dir = RunDir::create(&mimir_root, &run_id)?;
+
+            // Build editable set
+            let editable_set = if editable.is_empty() {
+                // Default: all tracked source files
+                mimir_edit::EditableSet::from_paths(
+                    std::fs::read_dir(".")
+                        .ok()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|e| e.ok())
+                        .filter(|e| {
+                            e.file_type().map(|t| t.is_file()).unwrap_or(false)
+                        })
+                        .filter_map(|e| e.path().to_str().map(|s| s.to_string()))
+                        .collect(),
+                )
+            } else {
+                mimir_edit::EditableSet::from_paths(editable)
+            };
+            println!("Editable set: {} files", editable_set.paths().len());
+
+            // Build context packet for the task
+            let packet_path = run_dir.context_packet_path();
+            let packet = mimir_context::ContextBuilder::new()
+                .task_card(&task)
+                .mode("code")
+                .provider("anthropic")
+                .model("claude-sonnet-4-20250514")
+                .build()?;
+            let packet_json = serde_json::to_string_pretty(&packet)?;
+            atomic_write(&packet_path, packet_json.as_bytes())?;
+            println!("Context packet: {}", packet_path);
+
+            // Run repair loop if tests are enabled
+            if !no_test {
+                let config = mimir_edit::repair::RepairConfig {
+                    max_repair_turns: max_repair_turns as u32,
+                    cost_cap_dollars: cost_cap,
+                    stop_on_success: true,
+                };
+
+                let repair_result = mimir_edit::repair::run_repair_loop(
+                    &config,
+                    || {
+                        // Run cargo test
+                        let output = std::process::Command::new("cargo")
+                            .args(["test", "--workspace"])
+                            .output()
+                            .map_err(|e| mimir_edit::EditError::Io(e.to_string()))?;
+                        Ok(mimir_edit::test_runner::TestRunResult {
+                            framework: mimir_edit::test_runner::TestFramework::CargoTest,
+                            command: "cargo test --workspace".into(),
+                            exit_code: output.status.code().unwrap_or(-1),
+                            stdout: String::from_utf8_lossy(&output.stdout).into(),
+                            stderr: String::from_utf8_lossy(&output.stderr).into(),
+                            passed: output.status.success(),
+                            tests_run: None,
+                            tests_failed: None,
+                        })
+                    },
+                    |_test_result| {
+                        // In a real implementation, this would call the provider
+                        // to generate fix patches. For now, return empty.
+                        println!("(Repair patches would be generated via provider API)");
+                        vec![]
+                    },
+                );
+
+                let repair_json = serde_json::to_string_pretty(&repair_result)?;
+                let repair_path = run_dir.context_packet_path().with_file_name("repair_result.json");
+                atomic_write(&repair_path, repair_json.as_bytes())?;
+                println!(
+                    "Repair loop: {} turns, converged: {}, reason: {}",
+                    repair_result.turns_executed,
+                    repair_result.converged,
+                    repair_result.stop_reason
+                );
+                println!("Repair result: {}", repair_path);
+            }
+
+            println!("Output: results written to {}", run_dir.context_packet_path().parent().unwrap_or(camino::Utf8Path::new(".")));
         }
         Commands::Review { since, committee, checks } => {
             let since_ref = since.as_deref().unwrap_or("HEAD~1");

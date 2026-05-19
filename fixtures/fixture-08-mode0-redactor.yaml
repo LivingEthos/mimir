@@ -1,0 +1,10 @@
+# Fixture 8: mode0-redactor
+mode: 0
+description: Secret redaction verification
+task: Verify all secret patterns are covered
+target_files:
+  - crates/mimir-security/src/redactor.rs
+expected_included:
+  - crates/mimir-security/src/redactor.rs
+expected_omitted:
+---

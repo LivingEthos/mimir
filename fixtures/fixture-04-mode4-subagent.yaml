@@ -1,0 +1,10 @@
+# Fixture 4: mode4-subagent
+mode: 4
+description: Subagent execution with evidence
+task: Run a security review subagent
+target_files:
+  - crates/mimir-subagents/src/lib.rs
+expected_included:
+  - crates/mimir-subagents/src/lib.rs
+expected_omitted:
+---

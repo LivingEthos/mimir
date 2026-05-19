@@ -1,0 +1,11 @@
+# Fixture 11: mode5-session-import
+mode: 5
+description: Session importer validation
+task: Import and validate external session
+target_files:
+  - crates/mimir-memory/src/importers/
+expected_included:
+  - crates/mimir-memory/src/importers/mod.rs
+  - crates/mimir-memory/src/importers/aider.rs
+expected_omitted:
+---
