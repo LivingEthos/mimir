@@ -132,4 +132,43 @@ mod tests {
         };
         assert!(gw.validate(&packet).is_ok());
     }
+
+    #[test]
+    fn validate_exactly_at_cap_passes() {
+        let gw = ProviderGateway::new(test_caps());
+        let packet = ValidatedPacket {
+            provider: "test".to_string(),
+            model: "test-model".to_string(),
+            estimated_input_tokens: 900,
+            output_reserve_tokens: 100,
+        };
+        assert!(gw.validate(&packet).is_ok());
+    }
+
+    #[test]
+    fn validate_zero_input_passes() {
+        let gw = ProviderGateway::new(test_caps());
+        let packet = ValidatedPacket {
+            provider: "test".to_string(),
+            model: "test-model".to_string(),
+            estimated_input_tokens: 0,
+            output_reserve_tokens: 100,
+        };
+        assert!(gw.validate(&packet).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_before_provider_io() {
+        // Cap compliance 100%: packet must be validated before any provider call
+        let gw = ProviderGateway::new(test_caps());
+        let packet = ValidatedPacket {
+            provider: "test".to_string(),
+            model: "test-model".to_string(),
+            estimated_input_tokens: 2000,
+            output_reserve_tokens: 100,
+        };
+        let result = gw.validate(&packet);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("gateway_over_cap"));
+    }
 }

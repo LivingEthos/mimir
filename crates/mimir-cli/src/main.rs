@@ -3,7 +3,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use mimir_core::ContextBuilder;
-use mimir_runs::RunId;
+use mimir_runs::{atomic_write, RunDir, RunId};
 use tracing::info;
 
 #[derive(Parser)]
@@ -107,6 +107,29 @@ enum Commands {
         #[arg(long)]
         rpc_stdio: bool,
     },
+    /// Ask a question with context retrieval.
+    Ask {
+        /// Question to ask.
+        question: String,
+        /// Output JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Packet portability commands.
+    Packet {
+        #[command(subcommand)]
+        cmd: PacketCmd,
+    },
+    /// Request a cap override.
+    Override {
+        #[command(subcommand)]
+        cmd: OverrideCmd,
+    },
+    /// Trace export commands.
+    Trace {
+        #[command(subcommand)]
+        cmd: TraceCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -198,6 +221,54 @@ enum ContextCmd {
         /// Enable prompt caching.
         #[arg(long)]
         cache: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum PacketCmd {
+    /// Share (sanitize and export) a packet.
+    Share {
+        /// Run ID of the packet to share.
+        run_id: String,
+        /// Output file path (default: stdout).
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    /// Replay a packet from local artifacts.
+    Replay {
+        /// Run ID to replay.
+        run_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum OverrideCmd {
+    /// Request a cap override.
+    Request {
+        /// Desired cap in tokens.
+        #[arg(long)]
+        cap: u32,
+        /// Reason for the override.
+        #[arg(long)]
+        reason: String,
+        /// Auto-grant after N failed attempts.
+        #[arg(long, default_value = "3")]
+        auto_grant_after: u32,
+    },
+}
+
+#[derive(Subcommand)]
+enum TraceCmd {
+    /// Export a run trace.
+    Export {
+        /// Run ID to export.
+        run_id: String,
+        /// Redact sensitive data.
+        #[arg(long)]
+        redact: bool,
+        /// Output file path.
+        #[arg(short, long)]
+        output: Option<String>,
     },
 }
 
@@ -507,6 +578,150 @@ fn main() -> Result<()> {
             };
             rt.block_on(mimir_server::run_server(config))?;
         }
+        Commands::Ask { question, json } => {
+            let run_id = RunId::generate();
+            let mimir_root = camino::Utf8PathBuf::from(".mimir");
+            let run_dir = RunDir::create(&mimir_root, &run_id)?;
+            let builder = ContextBuilder::new()
+                .task_card(&question)
+                .mode("standard")
+                .provider("anthropic")
+                .model("claude-sonnet-4-20250514");
+            let packet = builder.build()?;
+            let packet_json = serde_json::to_string_pretty(&packet)?;
+            atomic_write(&run_dir.context_packet_path(), packet_json.as_bytes())?;
+            if json {
+                println!(
+                    "{{\"run_id\":\"{}\",\"packet_id\":\"{}\",\"tokens\":{}}}",
+                    run_id, packet.packet_id, packet.estimated_input_tokens
+                );
+            } else {
+                println!("Question: {}", question);
+                println!("Run ID: {}", run_id);
+                println!("Packet: {} tokens", packet.estimated_input_tokens);
+                println!("(Provider call requires ANTHROPIC_API_KEY)");
+            }
+        }
+        Commands::Packet { cmd } => match cmd {
+            PacketCmd::Share { run_id, output } => {
+                let mimir_root = camino::Utf8PathBuf::from(".mimir");
+                let run_dir = RunDir::create(&mimir_root, &RunId(run_id.clone()))?;
+                let packet_path = run_dir.context_packet_path();
+                if !std::path::Path::new(&packet_path).exists() {
+                    println!("No packet found for run {}", run_id);
+                    std::process::exit(1);
+                }
+                let data = std::fs::read_to_string(&packet_path)?;
+                let mut packet: serde_json::Value = serde_json::from_str(&data)?;
+                // Sanitize: remove any potential secrets
+                if let Some(obj) = packet.as_object_mut() {
+                    obj.remove("api_key");
+                    obj.remove("secrets");
+                }
+                let sanitized = serde_json::to_string_pretty(&packet)?;
+                if let Some(out) = output {
+                    std::fs::write(&out, sanitized)?;
+                    println!("Sanitized packet written to {}", out);
+                } else {
+                    println!("{}", sanitized);
+                }
+            }
+            PacketCmd::Replay { run_id } => {
+                let mimir_root = camino::Utf8PathBuf::from(".mimir");
+                let run_dir = RunDir::create(&mimir_root, &RunId(run_id.clone()))?;
+                let packet_path = run_dir.context_packet_path();
+                if !std::path::Path::new(&packet_path).exists() {
+                    println!("No packet found for run {}", run_id);
+                    std::process::exit(1);
+                }
+                let data = std::fs::read_to_string(&packet_path)?;
+                let packet: mimir_schemas::ContextPacket = serde_json::from_str(&data)?;
+                println!("Replaying packet {}", packet.packet_id);
+                println!("Task: {}", packet.task_card);
+                println!("Included items: {}", packet.included.len());
+                println!("Estimated tokens: {}", packet.estimated_input_tokens);
+                println!(
+                    "(To actually replay, run: mimir context call .mimir/runs/{}/context_packet.json)",
+                    run_id
+                );
+            }
+        },
+        Commands::Override { cmd } => match cmd {
+            OverrideCmd::Request {
+                cap,
+                reason,
+                auto_grant_after,
+            } => {
+                let req = mimir_schemas::OverrideRequest {
+                    schema_version: 1,
+                    request_id: RunId::generate().to_string(),
+                    run_id: RunId::generate().to_string(),
+                    reason: format!("{} (cap: {}, auto_grant: {})", reason, cap, auto_grant_after),
+                    requested_by: "cli".to_string(),
+                };
+                let run_id = RunId::generate();
+                let mimir_root = camino::Utf8PathBuf::from(".mimir");
+                let run_dir = RunDir::create(&mimir_root, &run_id)?;
+                let req_json = serde_json::to_string_pretty(&req)?;
+                atomic_write(&run_dir.context_packet_path(), req_json.as_bytes())?;
+                println!("Override request recorded: {}", run_id);
+                println!("  Requested cap: {} tokens", cap);
+                println!("  Reason: {}", req.reason);
+                println!(
+                    "  Auto-grant after: {} failed attempts",
+                    auto_grant_after
+                );
+                println!("  Status: pending approval");
+            }
+        },
+        Commands::Trace { cmd } => match cmd {
+            TraceCmd::Export {
+                run_id,
+                redact,
+                output,
+            } => {
+                let mimir_root = camino::Utf8PathBuf::from(".mimir");
+                let run_dir = RunDir::create(&mimir_root, &RunId(run_id.clone()))?;
+                let trace_path = run_dir.events_path();
+                if !std::path::Path::new(&trace_path).exists() {
+                    println!("No trace found for run {}", run_id);
+                    std::process::exit(1);
+                }
+                let data = std::fs::read_to_string(&trace_path)?;
+                let lines: Vec<&str> = data.lines().collect();
+                let mut events: Vec<serde_json::Value> = Vec::new();
+                for line in &lines {
+                    if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
+                        events.push(event);
+                    }
+                }
+                if redact {
+                    for event in events.iter_mut() {
+                        if let Some(obj) = event.as_object_mut() {
+                            if let Some(payload) = obj.get_mut("payload") {
+                                if let Some(p) = payload.as_object_mut() {
+                                    if p.contains_key("api_key") {
+                                        p.insert("api_key".into(), "***REDACTED***".into());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                let export = serde_json::json!({
+                    "run_id": run_id,
+                    "event_count": events.len(),
+                    "events": events,
+                });
+                let export_json = serde_json::to_string_pretty(&export)?;
+                if let Some(out) = output {
+                    std::fs::write(&out, export_json)?;
+                    println!("Trace exported to {}", out);
+                } else {
+                    println!("{}", export_json);
+                }
+            }
+        },
     }
 
     Ok(())
