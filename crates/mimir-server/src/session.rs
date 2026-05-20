@@ -4,8 +4,8 @@
 //! selections, and conversation history.
 
 use dashmap::DashMap;
-use mimir_schemas::ContextPacket;
 use mimir_runs::RunId;
+use mimir_schemas::ContextPacket;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

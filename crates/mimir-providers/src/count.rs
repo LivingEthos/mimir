@@ -24,7 +24,7 @@ fn heuristic_count(text: &str) -> u32 {
     // Count characters and divide by average token length.
     // This is a rough estimate; actual tokenization varies by language.
     let char_count = text.chars().count() as u32;
-    (char_count + 3) / 4
+    char_count.div_ceil(4)
 }
 
 /// Count tokens for a structured request by serializing its content.

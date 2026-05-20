@@ -46,10 +46,7 @@ impl MimirLspBackend {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for MimirLspBackend {
-    async fn initialize(
-        &self,
-        _: InitializeParams,
-    ) -> RpcResult<InitializeResult> {
+    async fn initialize(&self, _: InitializeParams) -> RpcResult<InitializeResult> {
         info!("LSP initialize");
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -95,68 +92,79 @@ impl LanguageServer for MimirLspBackend {
 
         match params.command.as_str() {
             WORKSPACE_CONTEXT_GOVERNOR => {
-                let args = params.arguments.into_iter().next().ok_or_else(|| {
-                    RpcError::invalid_params("missing request body")
-                })?;
-                let req: ContextGovernorRequest = serde_json::from_value(args).map_err(|e| {
-                    RpcError::invalid_params(format!("invalid request: {}", e))
-                })?;
-                let resp = self.inner.handle_context_governor(req).map_err(|e| {
-                    internal_err(e.to_string())
-                })?;
-                Ok(Some(serde_json::to_value(resp).map_err(|e| {
-                    internal_err(e.to_string())
-                })?))
+                let args = params
+                    .arguments
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| RpcError::invalid_params("missing request body"))?;
+                let req: ContextGovernorRequest = serde_json::from_value(args)
+                    .map_err(|e| RpcError::invalid_params(format!("invalid request: {}", e)))?;
+                let resp = self
+                    .inner
+                    .handle_context_governor(req)
+                    .map_err(|e| internal_err(e.to_string()))?;
+                Ok(Some(
+                    serde_json::to_value(resp).map_err(|e| internal_err(e.to_string()))?,
+                ))
             }
             WORKSPACE_PROVIDERS => {
-                let caps = self.inner.handle_providers();
-                Ok(Some(serde_json::to_value(caps).map_err(|e| {
-                    internal_err(e.to_string())
-                })?))
+                let caps = self
+                    .inner
+                    .handle_providers()
+                    .map_err(|e| internal_err(e.to_string()))?;
+                Ok(Some(
+                    serde_json::to_value(caps).map_err(|e| internal_err(e.to_string()))?,
+                ))
             }
             SESSION_CREATE => {
                 let id = self.inner.handle_session_create();
                 Ok(Some(serde_json::json!({"session_id": id})))
             }
             SESSION_GET => {
-                let args = params.arguments.into_iter().next().ok_or_else(|| {
-                    RpcError::invalid_params("missing session_id")
-                })?;
-                let session_id: String = serde_json::from_value(args).map_err(|e| {
-                    RpcError::invalid_params(format!("invalid session_id: {}", e))
-                })?;
-                let resp = self.inner.handle_session_get(session_id).map_err(|e| {
-                    internal_err(e.to_string())
-                })?;
-                Ok(Some(serde_json::to_value(resp).map_err(|e| {
-                    internal_err(e.to_string())
-                })?))
+                let args = params
+                    .arguments
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| RpcError::invalid_params("missing session_id"))?;
+                let session_id: String = serde_json::from_value(args)
+                    .map_err(|e| RpcError::invalid_params(format!("invalid session_id: {}", e)))?;
+                let resp = self
+                    .inner
+                    .handle_session_get(session_id)
+                    .map_err(|e| internal_err(e.to_string()))?;
+                Ok(Some(
+                    serde_json::to_value(resp).map_err(|e| internal_err(e.to_string()))?,
+                ))
             }
             SESSION_SET_PROVIDER => {
-                let args = params.arguments.into_iter().next().ok_or_else(|| {
-                    RpcError::invalid_params("missing request body")
-                })?;
-                let req: SetProviderRequest = serde_json::from_value(args).map_err(|e| {
-                    RpcError::invalid_params(format!("invalid request: {}", e))
-                })?;
-                let resp = self.inner.handle_session_set_provider(req).map_err(|e| {
-                    internal_err(e.to_string())
-                })?;
+                let args = params
+                    .arguments
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| RpcError::invalid_params("missing request body"))?;
+                let req: SetProviderRequest = serde_json::from_value(args)
+                    .map_err(|e| RpcError::invalid_params(format!("invalid request: {}", e)))?;
+                let resp = self
+                    .inner
+                    .handle_session_set_provider(req)
+                    .map_err(|e| internal_err(e.to_string()))?;
                 Ok(Some(resp))
             }
             SESSION_BUILD_CONTEXT => {
-                let args = params.arguments.into_iter().next().ok_or_else(|| {
-                    RpcError::invalid_params("missing request body")
-                })?;
-                let req: SessionBuildContextRequest = serde_json::from_value(args).map_err(|e| {
-                    RpcError::invalid_params(format!("invalid request: {}", e))
-                })?;
-                let resp = self.inner.handle_session_build_context(req).map_err(|e| {
-                    internal_err(e.to_string())
-                })?;
-                Ok(Some(serde_json::to_value(resp).map_err(|e| {
-                    internal_err(e.to_string())
-                })?))
+                let args = params
+                    .arguments
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| RpcError::invalid_params("missing request body"))?;
+                let req: SessionBuildContextRequest = serde_json::from_value(args)
+                    .map_err(|e| RpcError::invalid_params(format!("invalid request: {}", e)))?;
+                let resp = self
+                    .inner
+                    .handle_session_build_context(req)
+                    .map_err(|e| internal_err(e.to_string()))?;
+                Ok(Some(
+                    serde_json::to_value(resp).map_err(|e| internal_err(e.to_string()))?,
+                ))
             }
             _ => {
                 warn!(command = %params.command, "Unknown command");

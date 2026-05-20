@@ -1,9 +1,9 @@
 //! Integration tests for the Mimir JSON-RPC server.
 
-use mimir_server::{run_server, ServerConfig, SessionStore};
+use mimir_server::{run_server, MimirLspBackend, MimirServer, ServerConfig, SessionStore};
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
+use tower_lsp::lsp_types::{ExecuteCommandParams, WorkDoneProgressParams};
+use tower_lsp::{LanguageServer, LspService};
 
 /// Test that the server responds to a TCP connection with a valid JSON-RPC message.
 #[tokio::test]
@@ -35,6 +35,77 @@ fn test_session_store_create_and_get() {
     assert_eq!(session.id.0, id.0);
     assert!(session.provider.is_none());
     assert!(session.model.is_none());
+}
+
+#[test]
+fn workspace_providers_lists_registry_and_dynamic_capabilities() {
+    let server = MimirServer::new(SessionStore::new());
+    let caps = server.handle_providers().unwrap();
+    let anthropic = caps
+        .providers
+        .iter()
+        .find(|provider| provider.provider == "anthropic")
+        .unwrap();
+    let model = anthropic.models.get("claude-sonnet-4-20250514").unwrap();
+    assert_eq!(model.max_input_tokens, 935_488);
+    assert_eq!(model.output_reserve_tokens, 64_000);
+    assert_eq!(model.pricing.input_per_million, 3.0);
+    assert!(caps
+        .providers
+        .iter()
+        .any(|provider| provider.provider == "glm"));
+    assert!(caps
+        .providers
+        .iter()
+        .any(|provider| provider.provider == "openai"));
+    assert!(caps
+        .providers
+        .iter()
+        .any(|provider| provider.provider == "openai-compatible"));
+
+    let wire = serde_json::to_value(&caps).unwrap();
+    assert_eq!(wire["schema_version"], 1);
+    assert!(wire["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|provider| { provider["provider"] == "glm" }));
+    assert!(wire["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|provider| { provider["provider"] == "openai" }));
+}
+
+#[tokio::test]
+async fn lsp_execute_command_workspace_providers_returns_plural_wire_shape() {
+    let (service, _socket) =
+        LspService::new(|client| MimirLspBackend::new(client, SessionStore::new()));
+    let value = service
+        .inner()
+        .execute_command(ExecuteCommandParams {
+            command: mimir_server::rpc::WORKSPACE_PROVIDERS.to_string(),
+            arguments: Vec::new(),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(value["schema_version"], 1);
+    let providers = value["providers"].as_array().unwrap();
+    assert!(providers
+        .iter()
+        .any(|provider| provider["provider"] == "anthropic"));
+    assert!(providers
+        .iter()
+        .any(|provider| provider["provider"] == "glm"));
+    assert!(providers
+        .iter()
+        .any(|provider| provider["provider"] == "openai"));
+    assert!(providers
+        .iter()
+        .any(|provider| provider["provider"] == "openai-compatible"));
 }
 
 /// Test SessionStore update and retrieve.

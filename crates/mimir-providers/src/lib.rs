@@ -15,6 +15,12 @@ pub mod retry;
 pub mod stream;
 pub mod types;
 
+pub use adapters::openai_compatible::{OpenAiCompatibleAdapter, OpenAiCompatibleConfig};
+pub use adapters::ProviderAdapter;
 pub use error::{ProviderError, Result};
-pub use gateway::{ProviderGateway, ValidatedPacket};
-pub use types::{ProviderMessage, ProviderRequest, ProviderResponse, ResponseBlock, TokenUsage, ToolSchema};
+pub use gateway::{
+    ProviderDispatchAdapter, ProviderGateway, ValidatedPacket, ValidatedProviderRequest,
+};
+pub use types::{
+    ProviderMessage, ProviderRequest, ProviderResponse, ResponseBlock, TokenUsage, ToolSchema,
+};

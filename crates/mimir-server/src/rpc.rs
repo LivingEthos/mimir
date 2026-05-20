@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::session::{SessionId, SessionStore};
 use mimir_context::ContextBuilder;
-use mimir_providers::capabilities::ProviderCapabilities;
+use mimir_providers::capabilities::ProviderCapabilitiesList;
 use mimir_schemas::ContextPacket;
 
 /// Custom request: build context for a session.
@@ -124,36 +124,8 @@ impl MimirServer {
     }
 
     /// Handle `workspace/providers`.
-    pub fn handle_providers(&self) -> ProviderCapabilities {
-        let mut caps = ProviderCapabilities {
-            schema_version: 1,
-            provider: "mimir".to_string(),
-            models: std::collections::HashMap::new(),
-        };
-        caps.models.insert(
-            "claude-sonnet-4-20250514".to_string(),
-            mimir_providers::capabilities::ModelCapabilities {
-                max_context_tokens: 1_000_000,
-                max_input_tokens: 1_000_000,
-                max_output_tokens: 8_192,
-                output_reserve_tokens: 1_024,
-                counts_system_tokens: true,
-                counts_tool_schemas: true,
-                counts_tool_results: true,
-                counts_reasoning_tokens: false,
-                supports_server_token_count: true,
-                supports_prompt_cache: true,
-                overflow_behavior: "error".to_string(),
-                pricing: mimir_providers::capabilities::Pricing {
-                    input_per_million: 3.0,
-                    output_per_million: 15.0,
-                    cache_write_per_million: Some(3.75),
-                    cache_read_per_million: Some(0.30),
-                },
-                count_drift_p95_observed: None,
-            },
-        );
-        caps
+    pub fn handle_providers(&self) -> anyhow::Result<ProviderCapabilitiesList> {
+        mimir_providers::capabilities::provider_capabilities_list().map_err(anyhow::Error::msg)
     }
 
     /// Handle `session/create`.
@@ -163,10 +135,7 @@ impl MimirServer {
     }
 
     /// Handle `session/get`.
-    pub fn handle_session_get(
-        &self,
-        session_id: String,
-    ) -> anyhow::Result<SessionGetResponse> {
+    pub fn handle_session_get(&self, session_id: String) -> anyhow::Result<SessionGetResponse> {
         let id = SessionId(session_id.clone());
         let session = self
             .sessions
@@ -182,10 +151,7 @@ impl MimirServer {
     }
 
     /// Handle `session/setProvider`.
-    pub fn handle_session_set_provider(
-        &self,
-        params: SetProviderRequest,
-    ) -> anyhow::Result<Value> {
+    pub fn handle_session_set_provider(&self, params: SetProviderRequest) -> anyhow::Result<Value> {
         let id = SessionId(params.session_id.clone());
         let mut session = self
             .sessions

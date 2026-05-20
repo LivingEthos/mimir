@@ -186,10 +186,10 @@ impl SseParser {
         let mut data_lines = Vec::new();
 
         for line in raw.lines() {
-            if line.starts_with("event:") {
-                event_type = line["event:".len()..].trim();
-            } else if line.starts_with("data:") {
-                data_lines.push(line["data:".len()..].trim());
+            if let Some(stripped) = line.strip_prefix("event:") {
+                event_type = stripped.trim();
+            } else if let Some(stripped) = line.strip_prefix("data:") {
+                data_lines.push(stripped.trim());
             } else if line.starts_with("id:") || line.starts_with(":") {
                 // Ignore ID lines and comments
                 continue;
@@ -327,14 +327,14 @@ impl StreamAccumulator {
             StreamEvent::MessageStart { message } => {
                 self.message_meta = Some(message.clone());
             }
-            StreamEvent::ContentBlockStart { content_block, .. } => {
-                if content_block.block_type == "tool_use" {
-                    self.current_tool = Some(ToolUseAccumulator {
-                        id: content_block.id.clone().unwrap_or_default(),
-                        name: content_block.name.clone().unwrap_or_default(),
-                        partial_json: String::new(),
-                    });
-                }
+            StreamEvent::ContentBlockStart { content_block, .. }
+                if content_block.block_type == "tool_use" =>
+            {
+                self.current_tool = Some(ToolUseAccumulator {
+                    id: content_block.id.clone().unwrap_or_default(),
+                    name: content_block.name.clone().unwrap_or_default(),
+                    partial_json: String::new(),
+                });
             }
             StreamEvent::ContentBlockDelta { delta, .. } => match delta {
                 ContentDelta::TextDelta { text } => {
@@ -368,13 +368,13 @@ impl StreamAccumulator {
     pub fn parsed_tool_uses(&self) -> Vec<crate::types::ResponseBlock> {
         self.tool_uses
             .iter()
-            .filter_map(|tool| {
+            .map(|tool| {
                 let input = serde_json::from_str(&tool.partial_json).unwrap_or_default();
-                Some(crate::types::ResponseBlock::ToolUse {
+                crate::types::ResponseBlock::ToolUse {
                     id: tool.id.clone(),
                     name: tool.name.clone(),
                     input,
-                })
+                }
             })
             .collect()
     }

@@ -38,9 +38,8 @@ impl Default for ServerConfig {
 /// If `tcp_bind` is set, listens on TCP. Otherwise uses stdio.
 pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
     let sessions = SessionStore::new();
-    let (service, socket) = tower_lsp::LspService::new(|client| {
-        MimirLspBackend::new(client, sessions.clone())
-    });
+    let (service, socket) =
+        tower_lsp::LspService::new(|client| MimirLspBackend::new(client, sessions.clone()));
 
     if let Some(bind_addr) = config.tcp_bind {
         tracing::info!("Starting Mimir server on TCP: {}", bind_addr);
@@ -48,12 +47,16 @@ pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
         let (stream, addr) = listener.accept().await?;
         tracing::info!("Client connected from: {:?}", addr);
         let (read, write) = tokio::io::split(stream);
-        tower_lsp::Server::new(read, write, socket).serve(service).await;
+        tower_lsp::Server::new(read, write, socket)
+            .serve(service)
+            .await;
     } else {
         tracing::info!("Starting Mimir server on stdio");
         let stdin = tokio::io::stdin();
         let stdout = tokio::io::stdout();
-        tower_lsp::Server::new(stdin, stdout, socket).serve(service).await;
+        tower_lsp::Server::new(stdin, stdout, socket)
+            .serve(service)
+            .await;
     }
 
     Ok(())

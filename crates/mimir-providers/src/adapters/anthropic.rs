@@ -22,6 +22,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::adapters::ProviderAdapter;
 use crate::capabilities::ProviderCapabilities;
 use crate::count;
 use crate::error::{map_anthropic_error, map_http_status, ProviderError, Result};
@@ -45,7 +46,9 @@ impl AnthropicAdapter {
     pub fn new() -> Result<Self> {
         let api_key = std::env::var("ANTHROPIC_API_KEY")
             .map(|s| SecretString::new(s.into_boxed_str()))
-            .map_err(|_| ProviderError::new("provider_unauthorized", "ANTHROPIC_API_KEY not set"))?;
+            .map_err(|_| {
+                ProviderError::new("provider_unauthorized", "ANTHROPIC_API_KEY not set")
+            })?;
 
         Ok(Self {
             client: reqwest::Client::new(),
@@ -90,7 +93,7 @@ impl AnthropicAdapter {
         );
         headers.insert(
             "anthropic-version",
-            HeaderValue::from_static("2023-06-01"),
+            HeaderValue::from_str(&self.api_version).expect("valid header value"),
         );
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers
@@ -98,9 +101,8 @@ impl AnthropicAdapter {
 
     /// Redact secrets from a string (e.g. error messages that may contain the request body).
     fn redact(&self, text: &str) -> String {
-        // Simple redaction: replace the exposed API key with a placeholder.
-        // In production this should use mimir_security::redact_secrets.
-        text.replace(self.api_key.expose_secret(), "[REDACTED_API_KEY]")
+        mimir_security::redact_secrets(text)
+            .replace(self.api_key.expose_secret(), "[REDACTED_API_KEY]")
     }
 
     /// Translate a provider-neutral request into Anthropic's JSON shape.
@@ -162,7 +164,9 @@ impl AnthropicAdapter {
 
         for attempt in 0..self.retry_policy.max_attempts {
             let mut req = self.client.request(method.clone(), &url);
-            req = req.headers(headers.clone()).timeout(Duration::from_secs(120));
+            req = req
+                .headers(headers.clone())
+                .timeout(Duration::from_secs(120));
             if let Some(ref b) = body {
                 req = req.json(b);
             }
@@ -184,7 +188,10 @@ impl AnthropicAdapter {
                     if attempt == self.retry_policy.max_attempts - 1 {
                         return Err(ProviderError::new(
                             "provider_connection_reset",
-                            &format!("request failed after {} attempts: {}", self.retry_policy.max_attempts, msg),
+                            format!(
+                                "request failed after {} attempts: {}",
+                                self.retry_policy.max_attempts, msg
+                            ),
                         )
                         .retryable());
                     }
@@ -195,7 +202,10 @@ impl AnthropicAdapter {
         }
 
         // Unreachable — loop always returns inside.
-        Err(ProviderError::new("provider_internal_error", "retry loop exhausted"))
+        Err(ProviderError::new(
+            "provider_internal_error",
+            "retry loop exhausted",
+        ))
     }
 
     /// Parse an Anthropic error response body into a [`ProviderError`].
@@ -219,29 +229,12 @@ impl AnthropicAdapter {
         }
 
         if let Ok(parsed) = serde_json::from_str::<AnthropicErrorBody>(&body_text) {
-            map_anthropic_error(&parsed.error.error_type, &parsed.error.message, status)
+            let message = self.redact(&parsed.error.message);
+            map_anthropic_error(&parsed.error.error_type, &message, status)
         } else {
             map_http_status(status, &redacted)
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// ProviderAdapter trait
-// ---------------------------------------------------------------------------
-
-/// Trait implemented by all provider adapters.
-pub trait ProviderAdapter: Send + Sync {
-    /// Adapter name.
-    fn name(&self) -> &str;
-    /// Current capabilities snapshot.
-    fn capabilities(&self) -> &ProviderCapabilities;
-    /// Local token count (fast, no network).
-    fn count_local(&self, request: &ProviderRequest) -> Result<u32>;
-    /// Server-side token count (network I/O).
-    async fn count_server(&self, request: &ProviderRequest) -> Result<u32>;
-    /// Dispatch a request and return the response.
-    async fn call(&self, request: ProviderRequest) -> Result<ProviderResponse>;
 }
 
 impl ProviderAdapter for AnthropicAdapter {
@@ -271,7 +264,11 @@ impl ProviderAdapter for AnthropicAdapter {
     async fn count_server(&self, request: &ProviderRequest) -> Result<u32> {
         let body = self.build_body(request);
         let resp = self
-            .request_with_retry(reqwest::Method::POST, "/v1/messages/count_tokens", Some(body))
+            .request_with_retry(
+                reqwest::Method::POST,
+                "/v1/messages/count_tokens",
+                Some(body),
+            )
             .await?;
 
         if !resp.status().is_success() {
@@ -283,15 +280,19 @@ impl ProviderAdapter for AnthropicAdapter {
             input_tokens: u32,
         }
 
-        let parsed: CountTokensResponse = resp
-            .json()
-            .await
-            .map_err(|e| ProviderError::new("provider_malformed_response", &self.redact(&e.to_string())))?;
+        let parsed: CountTokensResponse = resp.json().await.map_err(|e| {
+            ProviderError::new("provider_malformed_response", self.redact(&e.to_string()))
+        })?;
 
         Ok(parsed.input_tokens)
     }
+}
 
-    async fn call(&self, request: ProviderRequest) -> Result<ProviderResponse> {
+impl AnthropicAdapter {
+    pub(crate) async fn dispatch_validated(
+        &self,
+        request: ProviderRequest,
+    ) -> Result<ProviderResponse> {
         let body = self.build_body(&request);
         let resp = self
             .request_with_retry(reqwest::Method::POST, "/v1/messages", Some(body))
@@ -303,10 +304,8 @@ impl ProviderAdapter for AnthropicAdapter {
 
         #[derive(Deserialize)]
         struct AnthropicMessage {
-            id: String,
             #[serde(rename = "type")]
             _type: String,
-            role: String,
             content: Vec<AnthropicContentBlock>,
             #[serde(rename = "stop_reason")]
             stop_reason: Option<String>,
@@ -334,10 +333,9 @@ impl ProviderAdapter for AnthropicAdapter {
             cache_read_input_tokens: Option<u32>,
         }
 
-        let msg: AnthropicMessage = resp
-            .json()
-            .await
-            .map_err(|e| ProviderError::new("provider_malformed_response", &self.redact(&e.to_string())))?;
+        let msg: AnthropicMessage = resp.json().await.map_err(|e| {
+            ProviderError::new("provider_malformed_response", self.redact(&e.to_string()))
+        })?;
 
         // If stop_reason == "max_tokens", return a structured truncation error.
         if msg.stop_reason.as_deref() == Some("max_tokens") {
@@ -385,64 +383,7 @@ impl ProviderAdapter for AnthropicAdapter {
 // ---------------------------------------------------------------------------
 
 fn default_capabilities() -> ProviderCapabilities {
-    use crate::capabilities::{ModelCapabilities, Pricing};
-    use std::collections::HashMap;
-
-    let mut models = HashMap::new();
-
-    models.insert(
-        "claude-sonnet-4-6".to_string(),
-        ModelCapabilities {
-            max_context_tokens: 1_000_000,
-            max_input_tokens: 992_000,
-            max_output_tokens: 8192,
-            output_reserve_tokens: 8192,
-            counts_system_tokens: true,
-            counts_tool_schemas: true,
-            counts_tool_results: true,
-            counts_reasoning_tokens: false,
-            supports_server_token_count: true,
-            supports_prompt_cache: true,
-            overflow_behavior: "validation_error".to_string(),
-            pricing: Pricing {
-                input_per_million: 3.00,
-                output_per_million: 15.00,
-                cache_write_per_million: Some(3.75),
-                cache_read_per_million: Some(0.30),
-            },
-            count_drift_p95_observed: None,
-        },
-    );
-
-    models.insert(
-        "claude-haiku-4-5".to_string(),
-        ModelCapabilities {
-            max_context_tokens: 200_000,
-            max_input_tokens: 196_608,
-            max_output_tokens: 8192,
-            output_reserve_tokens: 8192,
-            counts_system_tokens: true,
-            counts_tool_schemas: true,
-            counts_tool_results: true,
-            counts_reasoning_tokens: false,
-            supports_server_token_count: true,
-            supports_prompt_cache: true,
-            overflow_behavior: "validation_error".to_string(),
-            pricing: Pricing {
-                input_per_million: 1.00,
-                output_per_million: 5.00,
-                cache_write_per_million: Some(1.25),
-                cache_read_per_million: Some(0.10),
-            },
-            count_drift_p95_observed: None,
-        },
-    );
-
-    ProviderCapabilities {
-        schema_version: 1,
-        provider: "anthropic".to_string(),
-        models,
-    }
+    crate::capabilities::bundled_anthropic_capabilities()
 }
 
 // ---------------------------------------------------------------------------
@@ -451,8 +392,8 @@ fn default_capabilities() -> ProviderCapabilities {
 
 #[cfg(test)]
 mod tests {
-    use crate::types::{ProviderMessage, ToolSchema};
     use super::*;
+    use crate::types::{ProviderMessage, ToolSchema};
 
     fn secret(s: &str) -> SecretString {
         SecretString::new(s.to_string().into_boxed_str())
@@ -478,7 +419,61 @@ mod tests {
         let count = adapter.count_local(&req).unwrap();
         // tiktoken-rs counts tokens more accurately than word count.
         // "You are a helpful assistant." + "Hello world" should be ~11 tokens.
-        assert!(count >= 5 && count <= 20, "token count {} should be reasonable", count);
+        assert!(
+            (5..=20).contains(&count),
+            "token count {} should be reasonable",
+            count
+        );
+    }
+
+    #[test]
+    fn runtime_capabilities_are_gateway_consistent() {
+        let capabilities = default_capabilities();
+        assert!(capabilities.models.contains_key("claude-sonnet-4-20250514"));
+
+        for (model_name, model) in &capabilities.models {
+            assert!(
+                model.output_reserve_tokens <= model.max_output_tokens,
+                "{model_name} output reserve exceeds max output"
+            );
+            assert!(
+                model.max_input_tokens
+                    + model.output_reserve_tokens
+                    + crate::capabilities::DEFAULT_COUNT_DRIFT_RESERVE_TOKENS
+                    <= model.max_context_tokens,
+                "{model_name} input + output reserve + drift reserve exceeds context"
+            );
+            assert_eq!(model.overflow_behavior, "validation_error");
+        }
+    }
+
+    #[test]
+    fn yaml_capabilities_match_runtime_cli_default() {
+        let yaml: ProviderCapabilities =
+            serde_yaml::from_str(include_str!("../../../../providers/anthropic.yaml")).unwrap();
+        let runtime = default_capabilities();
+        assert_eq!(
+            serde_json::to_value(yaml).unwrap(),
+            serde_json::to_value(runtime).unwrap()
+        );
+    }
+
+    #[test]
+    fn provider_yaml_validates_against_schema() {
+        let capabilities: ProviderCapabilities =
+            serde_yaml::from_str(include_str!("../../../../providers/anthropic.yaml")).unwrap();
+        let schema: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../schemas/ProviderCapabilities.schema.json"
+        ))
+        .unwrap();
+        let value = serde_json::to_value(capabilities).unwrap();
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        let errors = validator
+            .iter_errors(&value)
+            .map(|error| error.to_string())
+            .collect::<Vec<_>>();
+
+        assert!(errors.is_empty(), "schema validation failed: {errors:#?}");
     }
 
     #[test]

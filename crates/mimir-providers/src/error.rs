@@ -82,7 +82,9 @@ pub fn map_anthropic_error(error_type: &str, message: &str, status: u16) -> Prov
         }
     };
 
-    ProviderError::new(code, message).with_status(status).retryable_if(retryable)
+    ProviderError::new(code, message)
+        .with_status(status)
+        .retryable_if(retryable)
 }
 
 /// Map a raw HTTP status (no parsed error body) to a `ProviderError`.
@@ -100,7 +102,9 @@ pub fn map_http_status(status: u16, message: &str) -> ProviderError {
         _ => ("provider_internal_error", false),
     };
 
-    ProviderError::new(code, message).with_status(status).retryable_if(retryable)
+    ProviderError::new(code, message)
+        .with_status(status)
+        .retryable_if(retryable)
 }
 
 impl ProviderError {
