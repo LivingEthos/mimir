@@ -1,10 +1,8 @@
 //! Cost-tier mapping: subagents on Haiku, supervisor on Sonnet.
 
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
-use crate::{CostTier, EvidenceSummary};
+use crate::CostTier;
 
 /// Cost model for a provider/model combination.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,7 +38,9 @@ pub struct LedgerEntry {
 }
 
 impl CostLedger {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn record(&mut self, subagent: &str, model: &str, input: u32, output: u32, cost: f64) {
         self.entries.push(LedgerEntry {
@@ -53,7 +53,9 @@ impl CostLedger {
         self.total_usd += cost;
     }
 
-    pub fn total(&self) -> f64 { self.total_usd }
+    pub fn total(&self) -> f64 {
+        self.total_usd
+    }
 
     pub fn by_subagent(&self, name: &str) -> Vec<&LedgerEntry> {
         self.entries.iter().filter(|e| e.subagent == name).collect()
@@ -84,7 +86,10 @@ impl CostLedger {
             );
         }
         println!("├──────────────────┴────────────────┴───────────┼─────────────┤");
-        println!("│ Total                                         │ ${:10.4} │", self.total_usd);
+        println!(
+            "│ Total                                         │ ${:10.4} │",
+            self.total_usd
+        );
         println!("└───────────────────────────────────────────────┴─────────────┘");
     }
 }
@@ -121,7 +126,9 @@ pub fn tier_to_model(tier: CostTier, models: &[CostModel]) -> Option<&CostModel>
     models.iter().filter(|m| m.tier == tier).min_by(|a, b| {
         let a_total = a.input_cost_per_1k + a.output_cost_per_1k;
         let b_total = b.input_cost_per_1k + b.output_cost_per_1k;
-        a_total.partial_cmp(&b_total).unwrap_or(std::cmp::Ordering::Equal)
+        a_total
+            .partial_cmp(&b_total)
+            .unwrap_or(std::cmp::Ordering::Equal)
     })
 }
 

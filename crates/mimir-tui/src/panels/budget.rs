@@ -1,10 +1,10 @@
 //! Budget ledger panel.
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Bar, BarChart, BarGroup, Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph},
     Frame,
 };
 

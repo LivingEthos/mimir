@@ -44,6 +44,24 @@ impl RunDir {
         Ok(Self { root })
     }
 
+    /// Open an existing run directory without creating filesystem artifacts.
+    pub fn open(mimir_root: &Utf8PathBuf, run_id: &RunId) -> std::io::Result<Self> {
+        let root = mimir_root.join("runs").join(&run_id.0);
+        if root.is_dir() {
+            Ok(Self { root })
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("run directory not found: {}", root),
+            ))
+        }
+    }
+
+    /// Path to the run directory.
+    pub fn root(&self) -> &Utf8PathBuf {
+        &self.root
+    }
+
     /// Path to the context packet file.
     pub fn context_packet_path(&self) -> Utf8PathBuf {
         self.root.join("context_packet.json")
@@ -62,7 +80,10 @@ impl RunDir {
     /// Write an event line to `events.jsonl`.
     pub fn append_event(&self, event: &impl Serialize) -> std::io::Result<()> {
         let path = self.events_path();
-        let mut file = fs::OpenOptions::new().create(true).append(true).open(path)?;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
         let line = serde_json::to_string(event)?;
         writeln!(file, "{}", line)?;
         Ok(())
@@ -85,7 +106,11 @@ mod tests {
     fn run_id_format() {
         let id = RunId::generate();
         let re = regex::Regex::new(r"^\d{8}-\d{6}-[0-9a-f]{8}$").unwrap();
-        assert!(re.is_match(&id.0), "RunId {} does not match expected format", id.0);
+        assert!(
+            re.is_match(&id.0),
+            "RunId {} does not match expected format",
+            id.0
+        );
     }
 
     #[test]
@@ -95,9 +120,39 @@ mod tests {
         let _ = fs::remove_dir_all(&mimir_root);
         let run_id = RunId("20260101-120000-abcdef01".to_string());
         let run_dir = RunDir::create(&mimir_root, &run_id).unwrap();
-        assert!(run_dir.context_packet_path().as_str().contains("context_packet.json"));
-        assert!(run_dir.budget_ledger_path().as_str().contains("budget_ledger.json"));
+        assert!(run_dir
+            .context_packet_path()
+            .as_str()
+            .contains("context_packet.json"));
+        assert!(run_dir
+            .budget_ledger_path()
+            .as_str()
+            .contains("budget_ledger.json"));
         assert!(run_dir.events_path().as_str().contains("events.jsonl"));
+        let _ = fs::remove_dir_all(&mimir_root);
+    }
+
+    #[test]
+    fn run_dir_open_does_not_create_missing_dir() {
+        let tmp = camino::Utf8PathBuf::from(std::env::temp_dir().to_string_lossy().to_string());
+        let mimir_root = tmp.join("mimir-test-open-missing");
+        let _ = fs::remove_dir_all(&mimir_root);
+        let run_id = RunId("20260101-120000-abcdef99".to_string());
+        let result = RunDir::open(&mimir_root, &run_id);
+        assert!(result.is_err());
+        assert!(!mimir_root.join("runs").join(run_id.0).exists());
+        let _ = fs::remove_dir_all(&mimir_root);
+    }
+
+    #[test]
+    fn run_dir_open_existing_dir() {
+        let tmp = camino::Utf8PathBuf::from(std::env::temp_dir().to_string_lossy().to_string());
+        let mimir_root = tmp.join("mimir-test-open-existing");
+        let _ = fs::remove_dir_all(&mimir_root);
+        let run_id = RunId("20260101-120000-abcdef98".to_string());
+        let created = RunDir::create(&mimir_root, &run_id).unwrap();
+        let opened = RunDir::open(&mimir_root, &run_id).unwrap();
+        assert_eq!(created.root(), opened.root());
         let _ = fs::remove_dir_all(&mimir_root);
     }
 
@@ -109,8 +164,14 @@ mod tests {
         let run_id = RunId("20260101-120000-abcdef02".to_string());
         let run_dir = RunDir::create(&mimir_root, &run_id).unwrap();
         #[derive(Serialize)]
-        struct Ev { msg: String }
-        run_dir.append_event(&Ev { msg: "hello".to_string() }).unwrap();
+        struct Ev {
+            msg: String,
+        }
+        run_dir
+            .append_event(&Ev {
+                msg: "hello".to_string(),
+            })
+            .unwrap();
         let contents = fs::read_to_string(run_dir.events_path()).unwrap();
         assert!(contents.contains("hello"));
         let _ = fs::remove_dir_all(&mimir_root);
@@ -130,9 +191,19 @@ mod tests {
         let run_id = RunId("20260101-120000-abcdef03".to_string());
         let run_dir = RunDir::create(&mimir_root, &run_id).unwrap();
         #[derive(Serialize)]
-        struct Ev { msg: String }
-        run_dir.append_event(&Ev { msg: "first".to_string() }).unwrap();
-        run_dir.append_event(&Ev { msg: "second".to_string() }).unwrap();
+        struct Ev {
+            msg: String,
+        }
+        run_dir
+            .append_event(&Ev {
+                msg: "first".to_string(),
+            })
+            .unwrap();
+        run_dir
+            .append_event(&Ev {
+                msg: "second".to_string(),
+            })
+            .unwrap();
         let contents = fs::read_to_string(run_dir.events_path()).unwrap();
         let lines: Vec<&str> = contents.lines().collect();
         assert_eq!(lines.len(), 2);

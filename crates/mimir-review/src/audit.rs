@@ -3,8 +3,6 @@
 use std::fs;
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
-
 use crate::override_req::OverrideAuditEntry;
 
 /// Persist audit log to disk.

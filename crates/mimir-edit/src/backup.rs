@@ -1,9 +1,7 @@
 //! Backup-before-mutation for non-git files.
 
-use std::fs;
-use std::path::Path;
-
 use camino::Utf8Path;
+use std::fs;
 
 use crate::{EditError, Result};
 
@@ -29,14 +27,13 @@ impl BackupManager {
         }
 
         let backup_root = base.join(&self.backup_dir);
-        fs::create_dir_all(&backup_root)
-            .map_err(|e| EditError::BackupFailed {
-                path: path.to_string(),
-                reason: format!("create backup dir: {}", e),
-            })?;
+        fs::create_dir_all(&backup_root).map_err(|e| EditError::BackupFailed {
+            path: path.to_string(),
+            reason: format!("create backup dir: {}", e),
+        })?;
 
-        // Flatten path into backup filename
-        let backup_name = path.replace('/', "__");
+        // Keep backups flat, but encode separators so paths like a/b and a__b do not collide.
+        let backup_name = backup_name_for_path(path);
         let dst = backup_root.join(backup_name);
 
         fs::copy(&src, &dst).map_err(|e| EditError::BackupFailed {
@@ -49,7 +46,7 @@ impl BackupManager {
 
     /// Restore a file from backup.
     pub fn restore(&self, base: &Utf8Path, path: &str) -> Result<()> {
-        let backup_name = path.replace('/', "__");
+        let backup_name = backup_name_for_path(path);
         let src = base.join(&self.backup_dir).join(&backup_name);
         let dst = base.join(path);
 
@@ -67,6 +64,18 @@ impl BackupManager {
 
         Ok(())
     }
+}
+
+pub(crate) fn backup_name_for_path(path: &str) -> String {
+    path.as_bytes()
+        .iter()
+        .map(|byte| match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-' | b'_' => {
+                char::from(*byte).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -95,5 +104,13 @@ mod tests {
         // Restore
         mgr.restore(base, "test.txt").unwrap();
         assert_eq!(fs::read_to_string(&file_path).unwrap(), "original");
+    }
+
+    #[test]
+    fn backup_names_do_not_collide_for_separator_like_text() {
+        assert_ne!(
+            backup_name_for_path("a/b.txt"),
+            backup_name_for_path("a__b.txt")
+        );
     }
 }

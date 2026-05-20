@@ -43,13 +43,16 @@ impl ReviewPacket {
     ) -> Self {
         Self {
             target: target.into(),
-            diffs: diffs.iter().map(|d| FileDiffSummary {
-                path: d.path.clone(),
-                additions: d.additions,
-                deletions: d.deletions,
-                is_generated: d.is_generated,
-                summary: format!("{}+ {}-", d.additions, d.deletions),
-            }).collect(),
+            diffs: diffs
+                .iter()
+                .map(|d| FileDiffSummary {
+                    path: d.path.clone(),
+                    additions: d.additions,
+                    deletions: d.deletions,
+                    is_generated: d.is_generated,
+                    summary: format!("{}+ {}-", d.additions, d.deletions),
+                })
+                .collect(),
             test_evidence: test_evidence.cloned(),
             check_findings: check_findings.to_vec(),
             pending_overrides: Vec::new(),

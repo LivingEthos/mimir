@@ -8,7 +8,7 @@ use std::path::Path;
 use camino::Utf8Path;
 use regex::Regex;
 
-use crate::{Finding, ReviewError, Result};
+use crate::Finding;
 
 /// A source-controlled check loaded from `.mimir/checks/*.md`.
 #[derive(Debug, Clone)]
@@ -119,7 +119,8 @@ fn run_check(check: &Check, base: &Utf8Path) -> Vec<Finding> {
                             paths: vec![entry.to_string()],
                             description: format!(
                                 "Forbidden pattern '{}' found: {}",
-                                pattern, line.trim()
+                                pattern,
+                                line.trim()
                             ),
                             severity: check.severity.clone(),
                             line_numbers: Some(vec![(line_num + 1) as u32]),
@@ -151,10 +152,7 @@ fn run_check(check: &Check, base: &Utf8Path) -> Vec<Finding> {
             findings.push(Finding {
                 category: format!("check:{}", check.name),
                 paths: vec!["*".into()],
-                description: format!(
-                    "Required pattern '{}' not found in any file",
-                    pattern
-                ),
+                description: format!("Required pattern '{}' not found in any file", pattern),
                 severity: check.severity.clone(),
                 line_numbers: None,
             });

@@ -2,11 +2,9 @@
 //!
 //! Skills are reusable subagent configurations gated by file path patterns.
 
-use std::fs;
-use std::path::Path;
-
 use camino::Utf8Path;
 use serde::{Deserialize, Serialize};
+use std::fs;
 
 /// A skill definition loaded from `.mimir/skills/*.yaml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,7 +73,10 @@ fn glob_match(pattern: &str, path: &str) -> bool {
 
 /// Get all skills that apply to a file.
 pub fn active_skills<'a>(skills: &'a [Skill], file_path: &str) -> Vec<&'a Skill> {
-    skills.iter().filter(|s| skill_applies(s, file_path)).collect()
+    skills
+        .iter()
+        .filter(|s| skill_applies(s, file_path))
+        .collect()
 }
 
 #[cfg(test)]

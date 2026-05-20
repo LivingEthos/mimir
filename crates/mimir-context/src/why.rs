@@ -69,23 +69,20 @@ pub fn context_why(path: impl AsRef<Path>, run_id: &str) -> Result<WhyResult, an
 
     // Search included items first.
     for item in &packet.included {
-        if item.source_path == lookup {
+        if item.path == lookup {
             return Ok(WhyResult::Included {
-                // The stub IncludedItem does not have a separate reason_code field;
-                // we return the kind as a stand-in. In a full implementation this
-                // would come from the packed projection’s `reason_code`.
-                reason_code: item.kind.clone(),
-                token_count: item.token_count,
+                reason_code: item.reason_code.clone(),
+                token_count: item.tokens,
             });
         }
     }
 
     // Search omitted candidates.
     for omitted in &packet.omitted_candidates {
-        if omitted.source_path == lookup {
+        if omitted.path == lookup {
             return Ok(WhyResult::Omitted {
-                reason: omitted.reason.clone(),
-                token_count: omitted.token_count,
+                reason: omitted.reason_for_omission.clone(),
+                token_count: omitted.estimated_tokens,
             });
         }
     }
@@ -107,18 +104,18 @@ pub fn context_why(path: impl AsRef<Path>, run_id: &str) -> Result<WhyResult, an
 /// A [`WhyResult`] indicating inclusion, omission, or not found.
 pub fn context_why_packet(packet: &ContextPacket, path: &str) -> WhyResult {
     for item in &packet.included {
-        if item.source_path == path {
+        if item.path == path {
             return WhyResult::Included {
-                reason_code: item.kind.clone(),
-                token_count: item.token_count,
+                reason_code: item.reason_code.clone(),
+                token_count: item.tokens,
             };
         }
     }
     for omitted in &packet.omitted_candidates {
-        if omitted.source_path == path {
+        if omitted.path == path {
             return WhyResult::Omitted {
-                reason: omitted.reason.clone(),
-                token_count: omitted.token_count,
+                reason: omitted.reason_for_omission.clone(),
+                token_count: omitted.estimated_tokens,
             };
         }
     }
@@ -128,15 +125,24 @@ pub fn context_why_packet(packet: &ContextPacket, path: &str) -> WhyResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mimir_schemas::{ContextPacket, IncludedItem, OmittedCandidate};
+    use mimir_schemas::{ContextPacket, ContextRange, IncludedItem, OmittedCandidate, TaskCard};
 
     fn sample_packet() -> ContextPacket {
         ContextPacket {
             schema_version: 1,
             packet_id: "pkt-1".to_string(),
             packet_hash: "0".repeat(64),
-            run_id: "r1".to_string(),
-            task_card: "test".to_string(),
+            run_id: "20260101-000000-00000001".to_string(),
+            task_card: TaskCard {
+                goal: "test".to_string(),
+                acceptance_criteria: Vec::new(),
+                likely_files: Vec::new(),
+                risk_level: None,
+                expected_test_command: None,
+                unknowns: Vec::new(),
+                need_for_large_context: None,
+                complexity: "tiny".to_string(),
+            },
             mode: "code".to_string(),
             cap_tokens: 64000,
             target_tokens: 32000,
@@ -145,24 +151,39 @@ mod tests {
             provider: "anthropic".to_string(),
             model: "claude-sonnet-4-20250514".to_string(),
             capability_snapshot_ref: "anthropic.yaml".to_string(),
-            prompt_contract_version: "1.0.0".to_string(),
+            prompt_contract_version: 1,
             included: vec![IncludedItem {
-                kind: "file".to_string(),
-                source_path: "src/main.rs".to_string(),
-                content: "fn main() {}".to_string(),
-                token_count: 10,
+                path: "src/main.rs".to_string(),
+                ranges: vec![ContextRange { start: 1, end: 1 }],
+                candidate_kind: "full_file".to_string(),
+                reason_code: "direct_user_mention".to_string(),
+                tokens: 10,
+                source_hash: "0".repeat(64),
+                trust_level: "trusted".to_string(),
+                editable: false,
             }],
             omitted_candidates: vec![OmittedCandidate {
-                source_path: "src/old.rs".to_string(),
-                reason: "budget_overflow".to_string(),
-                token_count: 500,
+                schema_version: 1,
+                path: "src/old.rs".to_string(),
+                ranges: Vec::new(),
+                candidate_kind: "full_file".to_string(),
+                reason_code: "embedding_match".to_string(),
+                score: 0.0,
+                features: serde_json::json!({}),
+                estimated_tokens: 500,
+                discovered_by: vec!["manifest".to_string()],
+                source_hash: None,
+                reason_for_omission: "budget_overflow".to_string(),
+                risk: None,
+                what_would_trigger_inclusion: "Increase the context budget.".to_string(),
             }],
             tool_schemas: vec![],
             evidence_cards: vec![],
             memory_entries: vec![],
-            budget_ledger_ref: None,
+            budget_ledger_ref: ".mimir/runs/20260101-000000-00000001/budget_ledger.json"
+                .to_string(),
             estimated_input_tokens: 0,
-            count_provenance: "local".to_string(),
+            count_provenance: "local_estimate_only".to_string(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
             authoritative_input_tokens: None,
             recall_guard_flags: vec![],
@@ -176,7 +197,7 @@ mod tests {
         assert_eq!(
             result,
             WhyResult::Included {
-                reason_code: "file".to_string(),
+                reason_code: "direct_user_mention".to_string(),
                 token_count: 10,
             }
         );

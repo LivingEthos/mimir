@@ -1,12 +1,11 @@
 //! Deterministic file-analyst (no LLM).
 
-use std::collections::HashMap;
 use std::fs;
 
 use camino::Utf8Path;
 use regex::Regex;
 
-use crate::{EvidenceSummary, Result, SubagentError};
+use crate::EvidenceSummary;
 
 /// A pattern to search for in source code.
 #[derive(Debug, Clone)]
@@ -60,7 +59,8 @@ impl FileAnalyst {
         paths.sort();
         paths.dedup();
 
-        let bullet_points: Vec<String> = findings.iter()
+        let bullet_points: Vec<String> = findings
+            .iter()
             .take(20)
             .map(|f| format!("[{}] {}:{} — {}", f.severity, f.path, f.line, f.description))
             .collect();
@@ -197,15 +197,13 @@ fn main() {
 
     #[test]
     fn test_summarize() {
-        let findings = vec![
-            Finding {
-                line: 5,
-                pattern: "unwrap".into(),
-                severity: "warn".into(),
-                description: "Unwrap may panic".into(),
-                path: "src/main.rs".into(),
-            },
-        ];
+        let findings = vec![Finding {
+            line: 5,
+            pattern: "unwrap".into(),
+            severity: "warn".into(),
+            description: "Unwrap may panic".into(),
+            path: "src/main.rs".into(),
+        }];
         let summary = FileAnalyst::summarize(&findings, "Find panics");
         assert_eq!(summary.subagent, "file-analyst");
         assert_eq!(summary.findings.len(), 1);

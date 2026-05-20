@@ -2,7 +2,7 @@
 //!
 //! See 14-LEARNING-LAYER.md for task routing strategy.
 
-use crate::{CostTier, SubagentDef, SubagentError};
+use crate::CostTier;
 
 /// A task to be routed.
 #[derive(Debug, Clone)]
@@ -148,8 +148,14 @@ mod tests {
             requires_mutation: false,
         };
         // With low budget, complex analysis falls back to deterministic
-        assert_eq!(TaskRouter::route_with_tier(&task, 0.1), Some("file-analyst"));
+        assert_eq!(
+            TaskRouter::route_with_tier(&task, 0.1),
+            Some("file-analyst")
+        );
         // With high budget, uses LLM
-        assert_eq!(TaskRouter::route_with_tier(&task, 10.0), Some("file-analyst-llm"));
+        assert_eq!(
+            TaskRouter::route_with_tier(&task, 10.0),
+            Some("file-analyst-llm")
+        );
     }
 }

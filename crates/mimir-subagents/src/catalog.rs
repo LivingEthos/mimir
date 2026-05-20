@@ -87,7 +87,8 @@ impl ToolCatalog {
         if let Some(tool) = self.tools.get(name) {
             if !tool.deferred && !self.deferred.contains(&name.to_string()) {
                 self.deferred.push(name.to_string());
-                self.schema_tokens_used = self.schema_tokens_used.saturating_sub(tool.schema_tokens);
+                self.schema_tokens_used =
+                    self.schema_tokens_used.saturating_sub(tool.schema_tokens);
             }
         }
     }

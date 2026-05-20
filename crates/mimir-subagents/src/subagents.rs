@@ -64,7 +64,9 @@ impl Default for SubagentRegistry {
 }
 
 impl SubagentRegistry {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn get(&self, name: &str) -> Option<&SubagentDef> {
         self.agents.iter().find(|a| a.name == name)
@@ -80,9 +82,14 @@ impl SubagentRegistry {
 }
 
 /// Execute a subagent by name (stub — returns simulated evidence).
-pub fn execute_stub(name: &str, query: &str, parent_run_id: Option<&str>) -> Result<EvidenceSummary> {
+pub fn execute_stub(
+    name: &str,
+    query: &str,
+    parent_run_id: Option<&str>,
+) -> Result<EvidenceSummary> {
     let registry = SubagentRegistry::new();
-    let def = registry.get(name)
+    let def = registry
+        .get(name)
         .ok_or_else(|| SubagentError::UnknownSubagent(name.to_string()))?;
 
     if def.read_only {

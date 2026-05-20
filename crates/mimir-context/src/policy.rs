@@ -24,7 +24,8 @@ impl Default for TokenPolicy {
 impl TokenPolicy {
     /// Available tokens for content.
     pub fn available(&self) -> u32 {
-        self.cap_tokens.saturating_sub(self.output_reserve_tokens + self.count_drift_reserve_tokens)
+        self.cap_tokens
+            .saturating_sub(self.output_reserve_tokens + self.count_drift_reserve_tokens)
     }
 
     /// Check if a content token count fits.

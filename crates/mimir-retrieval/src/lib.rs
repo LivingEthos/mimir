@@ -259,13 +259,9 @@ impl Default for RankWeights {
 // Symbol extraction
 // ---------------------------------------------------------------------------
 
-static CAMEL_SNAKE_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"[a-zA-Z_][a-zA-Z0-9_]*"#).unwrap()
-});
+static CAMEL_SNAKE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"[a-zA-Z_][a-zA-Z0-9_]*"#).unwrap());
 
-static QUOTED_TERM_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"["']([^"']+)["']"#).unwrap()
-});
+static QUOTED_TERM_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"["']([^"']+)["']"#).unwrap());
 
 /// Extract symbol-like tokens from task text.
 ///
@@ -297,26 +293,20 @@ pub fn extract_symbols(task: &str) -> Vec<String> {
 
 fn is_common_word(token: &str) -> bool {
     let common: HashSet<&str> = [
-        "the", "and", "for", "are", "but", "not", "you", "all", "can",
-        "had", "her", "was", "one", "our", "out", "day", "get", "has",
-        "him", "his", "how", "its", "may", "new", "now", "old", "see",
-        "two", "who", "boy", "did", "she", "use", "her", "way", "many",
-        "oil", "sit", "set", "run", "eat", "far", "sea", "eye", "ago",
-        "off", "too", "any", "say", "man", "try", "ask", "end", "why",
-        "let", "put", "say", "she", "try", "way", "own", "say", "too",
-        "old", "tell", "very", "when", "come", "here", "just", "like",
-        "long", "make", "over", "such", "take", "than", "them", "well",
-        "were", "will", "with", "have", "from", "they", "know", "want",
-        "been", "good", "much", "some", "time", "would", "there", "their",
-        "what", "said", "each", "which", "how", "about", "if", "out",
-        "many", "then", "them", "these", "so", "some", "her", "would",
-        "make", "like", "into", "him", "has", "two", "more", "very",
-        "what", "know", "just", "first", "also", "after", "back", "other",
-        "many", "than", "only", "those", "come", "day", "most", "us",
-        "add", "fix", "ref", "use", "run", "get", "set", "new",
-        "old", "all", "any", "can", "had", "has", "how", "its", "may",
-        "now", "our", "out", "see", "two", "way", "who", "let", "put",
-        "say", "she", "too", "try", "way", "own", "say", "she", "too",
+        "the", "and", "for", "are", "but", "not", "you", "all", "can", "had", "her", "was", "one",
+        "our", "out", "day", "get", "has", "him", "his", "how", "its", "may", "new", "now", "old",
+        "see", "two", "who", "boy", "did", "she", "use", "her", "way", "many", "oil", "sit", "set",
+        "run", "eat", "far", "sea", "eye", "ago", "off", "too", "any", "say", "man", "try", "ask",
+        "end", "why", "let", "put", "say", "she", "try", "way", "own", "say", "too", "old", "tell",
+        "very", "when", "come", "here", "just", "like", "long", "make", "over", "such", "take",
+        "than", "them", "well", "were", "will", "with", "have", "from", "they", "know", "want",
+        "been", "good", "much", "some", "time", "would", "there", "their", "what", "said", "each",
+        "which", "how", "about", "if", "out", "many", "then", "them", "these", "so", "some", "her",
+        "would", "make", "like", "into", "him", "has", "two", "more", "very", "what", "know",
+        "just", "first", "also", "after", "back", "other", "many", "than", "only", "those", "come",
+        "day", "most", "us", "add", "fix", "ref", "use", "run", "get", "set", "new", "old", "all",
+        "any", "can", "had", "has", "how", "its", "may", "now", "our", "out", "see", "two", "way",
+        "who", "let", "put", "say", "she", "too", "try", "way", "own", "say", "she", "too",
     ]
     .iter()
     .copied()
@@ -374,7 +364,10 @@ pub fn stage1_cheap_scan(index: &RepoIndex, task: &str) -> Vec<ContextCandidate>
         for sym in &symbols {
             let sym_lower = sym.to_lowercase();
             if entry.exports.iter().any(|e| e.to_lowercase() == sym_lower)
-                || entry.imports.iter().any(|i| i.to_lowercase().contains(&sym_lower))
+                || entry
+                    .imports
+                    .iter()
+                    .any(|i| i.to_lowercase().contains(&sym_lower))
             {
                 symbol_hits += 1.0;
             }
@@ -445,13 +438,12 @@ pub fn import_export_closure(
                     if other_path == &current {
                         continue;
                     }
-                    if other_entry.exports.iter().any(|e| imp.contains(e))
-                        || other_entry.imports.iter().any(|i| i.contains(imp))
+                    if (other_entry.exports.iter().any(|e| imp.contains(e))
+                        || other_entry.imports.iter().any(|i| i.contains(imp)))
+                        && !visited.contains(other_path)
                     {
-                        if !visited.contains(other_path) {
-                            visited.insert(other_path.clone());
-                            queue.push((other_path.clone(), depth + 1));
-                        }
+                        visited.insert(other_path.clone());
+                        queue.push((other_path.clone(), depth + 1));
                     }
                 }
             }
@@ -464,13 +456,12 @@ pub fn import_export_closure(
             }
             if let Some(current_exports) = index.export_graph.get(&current) {
                 for exp in current_exports {
-                    if other_entry.imports.iter().any(|i| i.contains(exp))
-                        || other_entry.exports.iter().any(|e| e == exp)
+                    if (other_entry.imports.iter().any(|i| i.contains(exp))
+                        || other_entry.exports.iter().any(|e| e == exp))
+                        && !visited.contains(other_path)
                     {
-                        if !visited.contains(other_path) {
-                            visited.insert(other_path.clone());
-                            queue.push((other_path.clone(), depth + 1));
-                        }
+                        visited.insert(other_path.clone());
+                        queue.push((other_path.clone(), depth + 1));
                     }
                 }
             }
@@ -604,10 +595,13 @@ pub fn apply_token_penalty(candidates: &mut [ContextCandidate], threshold: u32) 
 ///
 /// When duplicates exist, the higher-scored candidate wins and the other's
 /// signals are merged into its `features`.
-pub fn merge_candidates(a: Vec<ContextCandidate>, b: Vec<ContextCandidate>) -> Vec<ContextCandidate> {
+pub fn merge_candidates(
+    a: Vec<ContextCandidate>,
+    b: Vec<ContextCandidate>,
+) -> Vec<ContextCandidate> {
     let mut by_path: HashMap<String, ContextCandidate> = HashMap::new();
 
-    for mut c in a.into_iter().chain(b.into_iter()) {
+    for mut c in a.into_iter().chain(b) {
         if let Some(existing) = by_path.get_mut(&c.path) {
             // Merge features from lower-scored into higher-scored
             if c.score > existing.score {
@@ -672,7 +666,9 @@ pub fn stage5_greedy_pack(
     config: &PipelineConfig,
     mandatory_paths: &[String],
 ) -> PackedManifest {
-    let effective_budget = config.target_input_tokens.saturating_sub(config.min_slack_tokens);
+    let effective_budget = config
+        .target_input_tokens
+        .saturating_sub(config.min_slack_tokens);
     let mut included = Vec::new();
     let mut omitted = Vec::new();
     let mut used_tokens: u32 = 0;
@@ -775,7 +771,7 @@ pub fn stage6_sufficiency_check(
                 && index
                     .import_graph
                     .get(&item.path)
-                    .map_or(false, |imports| imports.iter().any(|i| target.contains(i)))
+                    .is_some_and(|imports| imports.iter().any(|i| target.contains(i)))
         });
 
         let is_test = |path: &str| -> bool {
@@ -784,16 +780,10 @@ pub fn stage6_sufficiency_check(
         let has_test = manifest.included.iter().any(|item| is_test(&item.path));
 
         if !has_caller {
-            warnings.push(format!(
-                "edit target '{}' has no caller in packet",
-                target
-            ));
+            warnings.push(format!("edit target '{}' has no caller in packet", target));
         }
         if !has_test {
-            warnings.push(format!(
-                "edit target '{}' has no test in packet",
-                target
-            ));
+            warnings.push(format!("edit target '{}' has no test in packet", target));
         }
     }
 
@@ -801,9 +791,8 @@ pub fn stage6_sufficiency_check(
     for item in &manifest.included {
         for range in &item.ranges {
             let lines = range.end.saturating_sub(range.start) + 1;
-            if lines > 0 {
-                let density = item.estimated_tokens / lines;
-                if density < config.min_tokens_per_useful_line as u32 {
+            if let Some(density) = item.estimated_tokens.checked_div(lines) {
+                if density < config.min_tokens_per_useful_line {
                     warnings.push(format!(
                         "sparse range in '{}': {} tokens / {} lines",
                         item.path, item.estimated_tokens, lines
@@ -844,8 +833,11 @@ pub fn stage7_recall_guard(
 ) -> Vec<RecallGuardFlag> {
     let mut flags = Vec::new();
     let included_set: HashSet<&str> = manifest.included.iter().map(|i| i.path.as_str()).collect();
-    let omitted_map: HashMap<&str, &OmittedItem> =
-        manifest.omitted.iter().map(|o| (o.path.as_str(), o)).collect();
+    let omitted_map: HashMap<&str, &OmittedItem> = manifest
+        .omitted
+        .iter()
+        .map(|o| (o.path.as_str(), o))
+        .collect();
 
     // Flag 1: included file imports omitted file
     for item in &manifest.included {
@@ -862,7 +854,7 @@ pub fn stage7_recall_guard(
                         let export_matches = index
                             .export_graph
                             .get(*omitted_path)
-                            .map_or(false, |exports| exports.iter().any(|e| imp.contains(e)));
+                            .is_some_and(|exports| exports.iter().any(|e| imp.contains(e)));
                         if path_matches || export_matches {
                             flags.push(RecallGuardFlag {
                                 category: "import_of_omitted".to_string(),
@@ -886,21 +878,22 @@ pub fn stage7_recall_guard(
 
     for target in edit_targets {
         if included_set.contains(target.as_str()) {
-            for (omitted_path, omitted_item) in &omitted_map {
+            for omitted_path in omitted_map.keys() {
                 if is_test(omitted_path) {
                     // Check if test references target
-                    let test_refs_target = index
-                        .import_graph
-                        .get(*omitted_path)
-                        .map_or(false, |imports| {
-                            imports.iter().any(|i| {
-                                let stripped = i.strip_prefix("crate::").unwrap_or(i);
-                                target.contains(i)
-                                    || i.contains(target)
-                                    || target.contains(stripped)
-                                    || stripped.contains(target)
-                            })
-                        });
+                    let test_refs_target =
+                        index
+                            .import_graph
+                            .get(*omitted_path)
+                            .is_some_and(|imports| {
+                                imports.iter().any(|i| {
+                                    let stripped = i.strip_prefix("crate::").unwrap_or(i);
+                                    target.contains(i)
+                                        || i.contains(target)
+                                        || target.contains(stripped)
+                                        || stripped.contains(target)
+                                })
+                            });
                     if test_refs_target {
                         flags.push(RecallGuardFlag {
                             category: "omitted_test_for_target".to_string(),
@@ -1015,7 +1008,10 @@ mod tests {
             content_hash: "a".to_string(),
             token_count: 500,
             exports: vec!["main".to_string(), "run_app".to_string()],
-            imports: vec!["std::collections::HashMap".to_string(), "crate::utils".to_string()],
+            imports: vec![
+                "std::collections::HashMap".to_string(),
+                "crate::utils".to_string(),
+            ],
         });
 
         // Utility module
@@ -1053,7 +1049,8 @@ mod tests {
 
     #[test]
     fn extract_symbols_finds_quoted_and_camel() {
-        let task = r#"Fix the "validateSession" bug in userAuth module. Also check handle_request."#;
+        let task =
+            r#"Fix the "validateSession" bug in userAuth module. Also check handle_request."#;
         let syms = extract_symbols(task);
         assert!(syms.contains(&"validateSession".to_string()));
         assert!(syms.contains(&"userAuth".to_string()));
@@ -1158,7 +1155,12 @@ mod tests {
         let weights = RankWeights::default();
         let score = compute_score(&candidate, &weights);
         let expected = 5.0 * 1.0 + 4.0 * 0.5 - 1.0 * 0.2;
-        assert!((score - expected).abs() < 0.001, "score {} != expected {}", score, expected);
+        assert!(
+            (score - expected).abs() < 0.001,
+            "score {} != expected {}",
+            score,
+            expected
+        );
     }
 
     #[test]
@@ -1256,7 +1258,8 @@ mod tests {
             omitted: vec![],
             total_tokens: 500,
         };
-        let (ok, warnings) = stage6_sufficiency_check(&manifest, &index, &config, &["src/main.rs".to_string()]);
+        let (ok, warnings) =
+            stage6_sufficiency_check(&manifest, &index, &config, &["src/main.rs".to_string()]);
         assert!(!ok);
         assert!(warnings.iter().any(|w| w.contains("no test")));
     }
@@ -1329,18 +1332,30 @@ mod tests {
         };
         let flags = stage7_recall_guard(&manifest, &index, &["src/main.rs".to_string()]);
         assert!(!flags.is_empty());
-        assert!(flags.iter().any(|f| f.category == "omitted_test_for_target"));
+        assert!(flags
+            .iter()
+            .any(|f| f.category == "omitted_test_for_target"));
     }
 
     #[test]
     fn full_pipeline_runs_without_panic() {
         let index = make_index();
         let config = PipelineConfig::default();
-        let result = run_pipeline(&index, "Fix main.rs run_app bug", &["src/main.rs".to_string()], &config);
+        let result = run_pipeline(
+            &index,
+            "Fix main.rs run_app bug",
+            &["src/main.rs".to_string()],
+            &config,
+        );
         // Should produce some candidates
         assert!(!result.manifest.included.is_empty());
         // main.rs should be included
-        let paths: Vec<&str> = result.manifest.included.iter().map(|i| i.path.as_str()).collect();
+        let paths: Vec<&str> = result
+            .manifest
+            .included
+            .iter()
+            .map(|i| i.path.as_str())
+            .collect();
         assert!(paths.contains(&"src/main.rs"));
     }
 

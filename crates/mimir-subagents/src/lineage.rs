@@ -24,26 +24,27 @@ pub struct RunMeta {
 }
 
 impl LineageTracker {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Register a new subagent run with its parent.
-    pub fn spawn(
-        &mut self,
-        parent_run_id: &str,
-        child_run_id: &str,
-        subagent: &str,
-    ) {
+    pub fn spawn(&mut self, parent_run_id: &str, child_run_id: &str, subagent: &str) {
         self.children
             .entry(parent_run_id.to_string())
             .or_default()
             .push(child_run_id.to_string());
-        self.parents.insert(child_run_id.to_string(), parent_run_id.to_string());
-        self.runs.insert(child_run_id.to_string(), RunMeta {
-            run_id: child_run_id.to_string(),
-            subagent: subagent.to_string(),
-            started_at: chrono::Utc::now().to_rfc3339(),
-            tokens_consumed: 0,
-        });
+        self.parents
+            .insert(child_run_id.to_string(), parent_run_id.to_string());
+        self.runs.insert(
+            child_run_id.to_string(),
+            RunMeta {
+                run_id: child_run_id.to_string(),
+                subagent: subagent.to_string(),
+                started_at: chrono::Utc::now().to_rfc3339(),
+                tokens_consumed: 0,
+            },
+        );
     }
 
     /// Get all children of a run.

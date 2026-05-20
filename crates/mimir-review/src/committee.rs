@@ -25,7 +25,9 @@ impl Default for Committee {
 }
 
 impl Committee {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Add a reviewer's report.
     pub fn add_report(&mut self, reviewer: impl Into<String>, report: ReviewReport) {
@@ -51,8 +53,7 @@ impl Committee {
     }
 
     /// Produce a unified report grouped by category.
-    pub fn unify_by_category(&self,
-    ) -> HashMap<String, Vec<Finding>> {
+    pub fn unify_by_category(&self) -> HashMap<String, Vec<Finding>> {
         let mut grouped: HashMap<String, Vec<Finding>> = HashMap::new();
         let mut seen: HashSet<String> = HashSet::new();
 
@@ -75,7 +76,10 @@ impl Committee {
     pub fn print_findings(&self) {
         let unified = self.unify();
         println!("┌─────────────────────────────────────────────────────────────────────┐");
-        println!("│ Committee Review Findings ({})                                     │", unified.findings.len());
+        println!(
+            "│ Committee Review Findings ({})                                     │",
+            unified.findings.len()
+        );
         println!("├──────────────────────┬──────────┬───────────────────────────────────┤");
         println!("│ Category             │ Severity │ Description                       │");
         println!("├──────────────────────┼──────────┼───────────────────────────────────┤");
@@ -93,7 +97,12 @@ impl Committee {
 }
 
 fn default_dedup_key(finding: &Finding) -> String {
-    format!("{}:{}:{}", finding.category, finding.paths.join(","), finding.description)
+    format!(
+        "{}:{}:{}",
+        finding.category,
+        finding.paths.join(","),
+        finding.description
+    )
 }
 
 #[cfg(test)]

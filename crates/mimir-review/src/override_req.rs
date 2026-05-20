@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::{ReviewError, Result};
+use crate::{Result, ReviewError};
 
 /// A request to override a check or policy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,8 +104,12 @@ impl OverrideManager {
 
     /// Approve or deny a request.
     pub fn resolve(&mut self, request_id: &str, approved: bool) -> Result<()> {
-        let req = self.requests.get_mut(request_id)
-            .ok_or_else(|| ReviewError::OverrideDenied { request_id: request_id.to_string() })?;
+        let req = self
+            .requests
+            .get_mut(request_id)
+            .ok_or_else(|| ReviewError::OverrideDenied {
+                request_id: request_id.to_string(),
+            })?;
         req.approved = Some(approved);
         self.audit_log.push(OverrideAuditEntry {
             request_id: req.request_id.clone(),
@@ -132,7 +136,11 @@ impl OverrideManager {
         println!("│ Request ID   │ Target               │ Failures │ Auto-Grant │");
         println!("├──────────────┼──────────────────────┼──────────┼────────────┤");
         for req in self.requests.values().filter(|r| r.approved.is_none()) {
-            let auto = if req.prior_failures >= req.auto_grant_threshold { "YES*" } else { "no" };
+            let auto = if req.prior_failures >= req.auto_grant_threshold {
+                "YES*"
+            } else {
+                "no"
+            };
             println!(
                 "│ {:12} │ {:20} │ {:8} │ {:10} │",
                 &req.request_id[..req.request_id.len().min(12)],
@@ -145,9 +153,7 @@ impl OverrideManager {
     }
 
     /// Save audit log to JSON.
-    pub fn save_audit(
-        &self, path: &std::path::Path,
-    ) -> std::io::Result<()> {
+    pub fn save_audit(&self, path: &std::path::Path) -> std::io::Result<()> {
         let json = serde_json::to_string_pretty(&self.audit_log)?;
         std::fs::write(path, json)
     }
@@ -160,12 +166,9 @@ mod tests {
     #[test]
     fn test_override_auto_grant() {
         let mut mgr = OverrideManager::new();
-        let id = mgr.request_with_failures(
-            "large-context",
-            "Need 200K tokens for review",
-            "model",
-            3,
-        ).unwrap();
+        let id = mgr
+            .request_with_failures("large-context", "Need 200K tokens for review", "model", 3)
+            .unwrap();
         let req = mgr.get(&id).unwrap();
         assert!(req.auto_granted);
         assert_eq!(req.approved, Some(true));
@@ -175,12 +178,9 @@ mod tests {
     #[test]
     fn test_override_manual_approval() {
         let mut mgr = OverrideManager::new();
-        let id = mgr.request_with_failures(
-            "large-context",
-            "Need 200K tokens",
-            "model",
-            1,
-        ).unwrap();
+        let id = mgr
+            .request_with_failures("large-context", "Need 200K tokens", "model", 1)
+            .unwrap();
         let req = mgr.get(&id).unwrap();
         assert!(!req.auto_granted);
         assert_eq!(req.approved, None);
@@ -194,12 +194,9 @@ mod tests {
     #[test]
     fn test_override_denied() {
         let mut mgr = OverrideManager::new();
-        let id = mgr.request_with_failures(
-            "large-context",
-            "Need 200K tokens",
-            "model",
-            1,
-        ).unwrap();
+        let id = mgr
+            .request_with_failures("large-context", "Need 200K tokens", "model", 1)
+            .unwrap();
         mgr.resolve(&id, false).unwrap();
         let resolved = mgr.get(&id).unwrap();
         assert_eq!(resolved.approved, Some(false));

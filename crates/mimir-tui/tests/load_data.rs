@@ -1,6 +1,6 @@
 //! Integration tests for loading live data into the TUI App.
 
-use mimir_schemas::ContextPacket;
+use mimir_schemas::{ContextPacket, TaskCard};
 use mimir_tui::App;
 
 /// Returns a minimal valid ContextPacket for testing serialization.
@@ -8,10 +8,19 @@ fn minimal_packet() -> ContextPacket {
     ContextPacket {
         schema_version: 1,
         packet_id: "pkt-test-001".to_string(),
-        packet_hash: "abc123".to_string(),
-        run_id: "run-test-001".to_string(),
-        task_card: "Test task card".to_string(),
-        mode: "standard".to_string(),
+        packet_hash: "0".repeat(64),
+        run_id: "20260101-000000-00000001".to_string(),
+        task_card: TaskCard {
+            goal: "Test task card".to_string(),
+            acceptance_criteria: Vec::new(),
+            likely_files: Vec::new(),
+            risk_level: None,
+            expected_test_command: None,
+            unknowns: Vec::new(),
+            need_for_large_context: None,
+            complexity: "tiny".to_string(),
+        },
+        mode: "ask".to_string(),
         cap_tokens: 64000,
         target_tokens: 32000,
         output_reserve_tokens: 4096,
@@ -19,15 +28,15 @@ fn minimal_packet() -> ContextPacket {
         provider: "anthropic".to_string(),
         model: "claude-sonnet-4-20250514".to_string(),
         capability_snapshot_ref: "cap-001".to_string(),
-        prompt_contract_version: "1.0".to_string(),
+        prompt_contract_version: 1,
         included: vec![],
         omitted_candidates: vec![],
         tool_schemas: vec![],
         evidence_cards: vec![],
         memory_entries: vec![],
-        budget_ledger_ref: None,
+        budget_ledger_ref: ".mimir/runs/20260101-000000-00000001/budget_ledger.json".to_string(),
         estimated_input_tokens: 1000,
-        count_provenance: "tiktoken-rs".to_string(),
+        count_provenance: "local_estimate_only".to_string(),
         created_at: "2025-01-01T00:00:00Z".to_string(),
         authoritative_input_tokens: None,
         recall_guard_flags: vec![],
@@ -43,11 +52,12 @@ fn test_load_packet_from_file() {
 
     let mut app = App::new();
     assert!(app.packet.is_none());
-    app.load_from_file(path).expect("load_from_file should succeed");
+    app.load_from_file(path)
+        .expect("load_from_file should succeed");
     assert!(app.packet.is_some());
     let loaded = app.packet.unwrap();
     assert_eq!(loaded.packet_id, "pkt-test-001");
-    assert_eq!(loaded.run_id, "run-test-001");
+    assert_eq!(loaded.run_id, "20260101-000000-00000001");
     assert!(app.budget.is_some());
     assert_eq!(app.provider_counts.len(), 1);
     assert_eq!(app.provider_counts[0].name, "anthropic");
@@ -138,7 +148,15 @@ fn test_load_both_packet_and_pipeline() {
 
     assert!(app.packet.is_some());
     assert!(app.pipeline_result.is_some());
-    assert_eq!(app.pipeline_result.as_ref().unwrap().manifest.included.len(), 1);
+    assert_eq!(
+        app.pipeline_result
+            .as_ref()
+            .unwrap()
+            .manifest
+            .included
+            .len(),
+        1
+    );
 
     let _ = std::fs::remove_file(packet_path);
     let _ = std::fs::remove_file(pipeline_path);

@@ -17,7 +17,16 @@ mimir doctor
 
 # Build a context packet
 mimir context build
+
+# Ask a provider for an implementation plan
+mimir plan --editable src/lib.rs "Plan the change"
+
+# Generate, validate, apply, and test a safe patch
+mimir code --editable src/lib.rs --dry-run "Implement the change"
+mimir code --editable src/lib.rs "Implement the change"
 ```
+
+Provider credentials are environment-only (`GLM_API_KEY`, `ZAI_API_KEY`, `OPENAI_API_KEY`, or provider-compatible equivalents). `mimir code` requires explicit `--editable` paths, refuses pre-existing dirty target files, writes redacted run artifacts under `.mimir/runs/<run-id>/`, validates strict packet-bound patch recipes with a dry-run preflight, records provider-suggested tests without executing them, and can run a bounded repair loop when safe detected tests fail. Auto-run test subprocesses are launched with provider keys and generic secret-like environment variables stripped. If detected tests still fail, Mimir fails closed after writing artifacts and keeps the failed patch in the worktree for inspection.
 
 ## Workspace
 

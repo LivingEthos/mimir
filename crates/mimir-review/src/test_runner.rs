@@ -32,6 +32,7 @@ mod tests {
             stdout: "ok".into(),
             stderr: "".into(),
             passed: true,
+            timed_out: false,
             tests_run: Some(10),
             tests_failed: Some(0),
         };
@@ -49,6 +50,7 @@ mod tests {
             stdout: "failed".into(),
             stderr: "".into(),
             passed: false,
+            timed_out: false,
             tests_run: Some(5),
             tests_failed: Some(2),
         };

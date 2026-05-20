@@ -167,7 +167,7 @@ impl MemoryDecisionEngine {
     pub fn should_promote(&self, entry: &MemoryEntry) -> bool {
         entry
             .promotion_score
-            .map_or(false, |s| s >= Self::promotion_threshold())
+            .is_some_and(|s| s >= Self::promotion_threshold())
     }
 
     /// Decide whether an entry is safe to send to the model.
@@ -176,7 +176,7 @@ impl MemoryDecisionEngine {
         entry.safe_to_send
             && entry
                 .promotion_score
-                .map_or(false, |s| s >= Self::safe_to_send_threshold())
+                .is_some_and(|s| s >= Self::safe_to_send_threshold())
     }
 }
 

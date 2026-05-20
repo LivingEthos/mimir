@@ -29,13 +29,13 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph},
     Frame, Terminal,
 };
-use tracing::{debug, info, warn};
+use tracing::warn;
 
-use mimir_retrieval::{PackedManifest, PipelineResult, RecallGuardFlag};
-use mimir_schemas::{BudgetLedger, BudgetCategory, ContextPacket};
+use mimir_retrieval::PipelineResult;
+use mimir_schemas::{BudgetCategory, BudgetLedger, ContextPacket};
 
 use panels::{
     BudgetPanel, DiffPanel, IncludedPanel, OmittedPanel, PermissionsPanel, ProviderCountPanel,
@@ -250,10 +250,7 @@ where
         }
 
         if app.last_frame_time > Duration::from_millis(16) {
-            warn!(
-                "Slow frame: {:?} (target < 16ms)",
-                app.last_frame_time
-            );
+            warn!("Slow frame: {:?} (target < 16ms)", app.last_frame_time);
         }
     }
     Ok(())
@@ -271,7 +268,11 @@ fn draw_ui(f: &mut Frame, app: &App) {
         .split(f.area());
 
     let title = Paragraph::new("Mimir TUI — Context Governor")
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
         .alignment(ratatui::layout::Alignment::Center)
         .block(Block::default().borders(Borders::BOTTOM));
     f.render_widget(title, chunks[0]);
@@ -307,10 +308,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
     DiffPanel::draw(f, right_chunks[2], app, app.focused_panel == 5);
 
     let status = Paragraph::new(Line::from(vec![
-        Span::styled(
-            &app.status,
-            Style::default().fg(Color::Gray),
-        ),
+        Span::styled(&app.status, Style::default().fg(Color::Gray)),
         Span::raw(" | Frame: "),
         Span::styled(
             format!("{:?}", app.last_frame_time),

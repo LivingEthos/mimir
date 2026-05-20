@@ -50,7 +50,7 @@ impl IncludedPanel {
                         .join(", ");
                     lines.push(Line::from(vec![
                         Span::styled("• ", Style::default().fg(Color::Green)),
-                        Span::raw(format!("{}", item.path)),
+                        Span::raw(item.path.to_string()),
                         Span::raw(format!("  [{}]  ", range_str)),
                         Span::styled(
                             format!("{} tok", item.estimated_tokens),

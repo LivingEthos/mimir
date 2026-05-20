@@ -2,9 +2,6 @@
 
 #![warn(missing_docs)]
 
-use regex::Regex;
-use std::sync::OnceLock;
-
 /// Safety classification for commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SafetyClass {
@@ -53,7 +50,7 @@ pub fn classify_command(cmd: &str) -> SafetyClass {
 /// Redact known secret patterns from text.
 pub mod redactor;
 
-pub use redactor::redact_secrets;
+pub use redactor::{redact_json_value, redact_secrets};
 
 #[cfg(test)]
 mod tests {
@@ -76,7 +73,10 @@ mod tests {
     #[test]
     fn test_classify_mutate() {
         assert_eq!(classify_command("git commit -m 'msg'"), SafetyClass::Mutate);
-        assert_eq!(classify_command("git push origin main"), SafetyClass::Mutate);
+        assert_eq!(
+            classify_command("git push origin main"),
+            SafetyClass::Mutate
+        );
     }
 
     #[test]

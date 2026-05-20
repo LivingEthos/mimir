@@ -160,10 +160,8 @@ static RUST_PUB_RE: Lazy<Regex> = Lazy::new(|| {
 });
 
 static TS_IMPORT_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r#"(?m)^\s*import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?['"]([^'"]+)['"]"#,
-    )
-    .unwrap()
+    Regex::new(r#"(?m)^\s*import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?['"]([^'"]+)['"]"#)
+        .unwrap()
 });
 
 static TS_EXPORT_RE: Lazy<Regex> = Lazy::new(|| {
@@ -287,7 +285,7 @@ pub fn walk_files(root: &Path) -> impl Iterator<Item = PathBuf> + '_ {
         .require_git(false)
         .build()
         .filter_map(|entry| entry.ok())
-        .filter(|e| e.file_type().map_or(false, |ft| ft.is_file()))
+        .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
         .filter_map(move |e| {
             e.path()
                 .strip_prefix(root)
@@ -478,13 +476,17 @@ pub fn build_index(root: &Path) -> Result<RepoIndex> {
             path: rel.to_string_lossy().to_string(),
             language: lang,
             content_hash: hash,
-            token_count: 0, // caller can fill in later with a tokenizer
+            token_count: estimate_tokens(&text),
             exports,
             imports,
         };
         index.add(entry);
     }
     Ok(index)
+}
+
+fn estimate_tokens(text: &str) -> u32 {
+    (text.chars().count() as u32).div_ceil(4)
 }
 
 // ---------------------------------------------------------------------------
@@ -544,15 +546,9 @@ mod tests {
     #[test]
     fn detect_language_by_shebang() {
         let py = "#!/usr/bin/env python3\nprint(1)\n";
-        assert_eq!(
-            detect_language(Path::new("script"), Some(py)),
-            "python"
-        );
+        assert_eq!(detect_language(Path::new("script"), Some(py)), "python");
         let sh = "#!/bin/bash\necho hi\n";
-        assert_eq!(
-            detect_language(Path::new("script"), Some(sh)),
-            "shell"
-        );
+        assert_eq!(detect_language(Path::new("script"), Some(sh)), "shell");
         let node = "#!/usr/bin/env node\nconsole.log(1)\n";
         assert_eq!(
             detect_language(Path::new("script"), Some(node)),
@@ -773,7 +769,9 @@ use std::collections::HashMap;
         let lib = index.get("src/lib.rs").unwrap();
         assert_eq!(lib.language, "rust");
         assert!(lib.exports.contains(&"add".to_string()));
-        assert!(lib.imports.contains(&"std::collections::HashMap".to_string()));
+        assert!(lib
+            .imports
+            .contains(&"std::collections::HashMap".to_string()));
 
         let py = index.get("hello.py").unwrap();
         assert_eq!(py.language, "python");
@@ -795,7 +793,7 @@ use std::collections::HashMap;
         index.remove("a.rs");
         assert_eq!(index.len(), 0);
         assert!(index.get("a.rs").is_none());
-        assert!(index.import_graph.get("a.rs").is_none());
-        assert!(index.export_graph.get("a.rs").is_none());
+        assert!(!index.import_graph.contains_key("a.rs"));
+        assert!(!index.export_graph.contains_key("a.rs"));
     }
 }

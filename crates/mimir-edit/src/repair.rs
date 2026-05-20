@@ -4,8 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::test_runner::{TestRunResult, TestFramework};
-use crate::{EditError, Result};
+use crate::test_runner::TestRunResult;
+use crate::Result;
 
 /// Configuration for the repair loop.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +136,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_runner::TestFramework;
 
     #[test]
     fn test_repair_loop_converges_on_first_success() {
@@ -157,6 +158,7 @@ mod tests {
                     stdout: "ok".into(),
                     stderr: "".into(),
                     passed: true,
+                    timed_out: false,
                     tests_run: Some(1),
                     tests_failed: Some(0),
                 })
@@ -188,6 +190,7 @@ mod tests {
                     stdout: "failed".into(),
                     stderr: "".into(),
                     passed: false,
+                    timed_out: false,
                     tests_run: Some(1),
                     tests_failed: Some(1),
                 })
@@ -218,6 +221,7 @@ mod tests {
                     stdout: "failed".into(),
                     stderr: "".into(),
                     passed: false,
+                    timed_out: false,
                     tests_run: Some(1),
                     tests_failed: Some(1),
                 })

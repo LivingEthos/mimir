@@ -9,7 +9,7 @@ pub mod backup;
 pub mod git;
 pub mod test_runner;
 
-pub use apply::PatchEngine;
+pub use apply::{PatchEngine, PatchTransaction};
 pub use backup::BackupManager;
 pub use git::WorktreeStatus;
 
@@ -21,7 +21,12 @@ pub enum EditError {
     #[error("file_not_found: {path}")]
     FileNotFound { path: String },
     #[error("invalid_line_range: {path} lines {start}-{end} (file has {file_lines} lines)")]
-    InvalidLineRange { path: String, start: usize, end: usize, file_lines: usize },
+    InvalidLineRange {
+        path: String,
+        start: usize,
+        end: usize,
+        file_lines: usize,
+    },
     #[error("diff_apply_failed: {path} — {reason}")]
     DiffApplyFailed { path: String, reason: String },
     #[error("dirty_worktree: {path} has uncommitted changes")]
@@ -41,9 +46,13 @@ pub struct EditableSet {
 }
 
 impl EditableSet {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
     pub fn from_paths(paths: Vec<String>) -> Self {
-        Self { paths: paths.into_iter().collect() }
+        Self {
+            paths: paths.into_iter().collect(),
+        }
     }
     pub fn add(&mut self, path: impl Into<String>) {
         self.paths.insert(path.into());
@@ -51,7 +60,9 @@ impl EditableSet {
     pub fn contains(&self, path: &str) -> bool {
         self.paths.contains(path)
     }
-    pub fn paths(&self) -> &HashSet<String> { &self.paths }
+    pub fn paths(&self) -> &HashSet<String> {
+        &self.paths
+    }
 }
 
 /// Extract target paths from a patch step.
@@ -71,7 +82,9 @@ pub fn patch_step_paths(step: &mimir_schemas::PatchStep) -> Vec<&str> {
 pub fn verify_editable_set(step: &mimir_schemas::PatchStep, editable: &EditableSet) -> Result<()> {
     for path in patch_step_paths(step) {
         if !editable.contains(path) {
-            return Err(EditError::FileNotEditable { path: path.to_string() });
+            return Err(EditError::FileNotEditable {
+                path: path.to_string(),
+            });
         }
     }
     Ok(())

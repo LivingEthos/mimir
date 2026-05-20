@@ -37,7 +37,7 @@ impl RecallGuard {
     /// # Example
     ///
     /// ```
-    /// use mimir_schemas::{ContextPacket, CandidateManifest};
+    /// use mimir_schemas::{CandidateManifest, ContextPacket, TaskCard};
     /// use mimir_context::recall::RecallGuard;
     ///
     /// let packet = ContextPacket {
@@ -45,7 +45,16 @@ impl RecallGuard {
     ///     packet_id: "pkt-1".to_string(),
     ///     packet_hash: "0".repeat(64),
     ///     run_id: "r1".to_string(),
-    ///     task_card: "test".to_string(),
+    ///     task_card: TaskCard {
+    ///         goal: "test".to_string(),
+    ///         acceptance_criteria: vec![],
+    ///         likely_files: vec![],
+    ///         risk_level: None,
+    ///         expected_test_command: None,
+    ///         unknowns: vec![],
+    ///         need_for_large_context: None,
+    ///         complexity: "low".to_string(),
+    ///     },
     ///     mode: "code".to_string(),
     ///     cap_tokens: 64000,
     ///     target_tokens: 32000,
@@ -54,15 +63,15 @@ impl RecallGuard {
     ///     provider: "anthropic".to_string(),
     ///     model: "claude-sonnet-4-20250514".to_string(),
     ///     capability_snapshot_ref: "anthropic.yaml".to_string(),
-    ///     prompt_contract_version: "1.0.0".to_string(),
+    ///     prompt_contract_version: 1,
     ///     included: vec![],
     ///     omitted_candidates: vec![],
     ///     tool_schemas: vec![],
     ///     evidence_cards: vec![],
     ///     memory_entries: vec![],
-    ///     budget_ledger_ref: None,
+    ///     budget_ledger_ref: ".mimir/runs/r1/budget_ledger.json".to_string(),
     ///     estimated_input_tokens: 0,
-    ///     count_provenance: "local".to_string(),
+    ///     count_provenance: "local_estimate_only".to_string(),
     ///     created_at: "2026-01-01T00:00:00Z".to_string(),
     ///     authoritative_input_tokens: None,
     ///     recall_guard_flags: vec![],
@@ -78,11 +87,8 @@ impl RecallGuard {
     pub fn new(packet: &ContextPacket, manifest: &CandidateManifest) -> Self {
         let mut flags = Vec::new();
 
-        let included_paths: std::collections::HashSet<&str> = packet
-            .included
-            .iter()
-            .map(|i| i.source_path.as_str())
-            .collect();
+        let included_paths: std::collections::HashSet<&str> =
+            packet.included.iter().map(|i| i.path.as_str()).collect();
 
         // Stage 7 rules from 09-RETRIEVAL-PIPELINE.md:
         // 1. If an included file imports an omitted file with reason lower_relevance_score, flag.
@@ -91,26 +97,26 @@ impl RecallGuard {
         // 4. If an omitted candidate has failing_test_reference reason but was dropped for budget, flag.
 
         for omitted in &packet.omitted_candidates {
-            let path = &omitted.source_path;
-            let reason = &omitted.reason;
+            let path = &omitted.path;
+            let reason = &omitted.reason_for_omission;
 
             // Rule 1: import orphan — omitted file is imported by an included file.
             // (Heuristic: if the omitted path appears in the manifest with a caller/callee
             // relationship to an included path, flag it.)
-            if reason.contains("relevance") || reason.contains("lower") {
-                if manifest_has_link_to_included(manifest, path, &included_paths) {
-                    flags.push(RecallGuardFlag {
-                        risk: risk::IMPORT_ORPHAN.to_string(),
-                        path: path.clone(),
-                        reason: format!(
-                            "Omitted file {} is linked to an included file but was dropped for lower relevance",
-                            path
-                        ),
-                        suggestion: Some(
-                            "Consider expanding retrieval or relaxing relevance threshold.".to_string(),
-                        ),
-                    });
-                }
+            if (reason.contains("relevance") || reason.contains("lower"))
+                && manifest_has_link_to_included(manifest, path, &included_paths)
+            {
+                flags.push(RecallGuardFlag {
+                    risk: risk::IMPORT_ORPHAN.to_string(),
+                    path: path.clone(),
+                    reason: format!(
+                        "Omitted file {} is linked to an included file but was dropped for lower relevance",
+                        path
+                    ),
+                    suggestion: Some(
+                        "Consider expanding retrieval or relaxing relevance threshold.".to_string(),
+                    ),
+                });
             }
 
             // Rule 2: config/schema missing
@@ -134,10 +140,7 @@ impl RecallGuard {
                 flags.push(RecallGuardFlag {
                     risk: risk::TEST_MISSING.to_string(),
                     path: path.clone(),
-                    reason: format!(
-                        "Omitted test file {} covers an included edit target",
-                        path
-                    ),
+                    reason: format!("Omitted test file {} covers an included edit target", path),
                     suggestion: Some(
                         "Include the test file to ensure the model can verify changes.".to_string(),
                     ),
@@ -175,10 +178,7 @@ impl RecallGuard {
 
     /// Return flags filtered by risk level.
     pub fn by_risk(&self, risk_level: &str) -> Vec<&RecallGuardFlag> {
-        self.flags
-            .iter()
-            .filter(|f| f.risk == risk_level)
-            .collect()
+        self.flags.iter().filter(|f| f.risk == risk_level).collect()
     }
 }
 /// Check if the manifest shows any link between `path` and an included path.
@@ -194,10 +194,7 @@ fn manifest_has_link_to_included(
 }
 
 /// Check if `path` shares a directory prefix with any included path.
-fn shares_directory_prefix(
-    path: &str,
-    included_paths: &std::collections::HashSet<&str>,
-) -> bool {
+fn shares_directory_prefix(path: &str, included_paths: &std::collections::HashSet<&str>) -> bool {
     let path_prefix = std::path::Path::new(path)
         .parent()
         .and_then(|p| p.to_str())
@@ -264,15 +261,27 @@ fn is_test_file(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mimir_schemas::{ContextPacket, IncludedItem, OmittedCandidate, CandidateManifest, ContextCandidate};
+    use mimir_schemas::{
+        CandidateManifest, ContextCandidate, ContextPacket, ContextRange, IncludedItem,
+        OmittedCandidate, TaskCard,
+    };
 
     fn empty_packet() -> ContextPacket {
         ContextPacket {
             schema_version: 1,
             packet_id: "pkt-1".to_string(),
             packet_hash: "0".repeat(64),
-            run_id: "r1".to_string(),
-            task_card: "test".to_string(),
+            run_id: "20260101-000000-00000001".to_string(),
+            task_card: TaskCard {
+                goal: "test".to_string(),
+                acceptance_criteria: Vec::new(),
+                likely_files: Vec::new(),
+                risk_level: None,
+                expected_test_command: None,
+                unknowns: Vec::new(),
+                need_for_large_context: None,
+                complexity: "tiny".to_string(),
+            },
             mode: "code".to_string(),
             cap_tokens: 64000,
             target_tokens: 32000,
@@ -281,18 +290,50 @@ mod tests {
             provider: "anthropic".to_string(),
             model: "claude-sonnet-4-20250514".to_string(),
             capability_snapshot_ref: "anthropic.yaml".to_string(),
-            prompt_contract_version: "1.0.0".to_string(),
+            prompt_contract_version: 1,
             included: vec![],
             omitted_candidates: vec![],
             tool_schemas: vec![],
             evidence_cards: vec![],
             memory_entries: vec![],
-            budget_ledger_ref: None,
+            budget_ledger_ref: ".mimir/runs/20260101-000000-00000001/budget_ledger.json"
+                .to_string(),
             estimated_input_tokens: 0,
-            count_provenance: "local".to_string(),
+            count_provenance: "local_estimate_only".to_string(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
             authoritative_input_tokens: None,
             recall_guard_flags: vec![],
+        }
+    }
+
+    fn included(path: &str, tokens: u32) -> IncludedItem {
+        IncludedItem {
+            path: path.to_string(),
+            ranges: vec![ContextRange { start: 1, end: 1 }],
+            candidate_kind: "full_file".to_string(),
+            reason_code: "direct_user_mention".to_string(),
+            tokens,
+            source_hash: "0".repeat(64),
+            trust_level: "trusted".to_string(),
+            editable: false,
+        }
+    }
+
+    fn omitted(path: &str, reason: &str, tokens: u32) -> OmittedCandidate {
+        OmittedCandidate {
+            schema_version: 1,
+            path: path.to_string(),
+            ranges: Vec::new(),
+            candidate_kind: "full_file".to_string(),
+            reason_code: "embedding_match".to_string(),
+            score: 0.0,
+            features: serde_json::json!({}),
+            estimated_tokens: tokens,
+            discovered_by: vec!["manifest".to_string()],
+            source_hash: None,
+            reason_for_omission: reason.to_string(),
+            risk: None,
+            what_would_trigger_inclusion: "Increase retrieval relevance.".to_string(),
         }
     }
 
@@ -316,17 +357,10 @@ mod tests {
     #[test]
     fn flags_omitted_test_file() {
         let mut packet = empty_packet();
-        packet.included.push(IncludedItem {
-            kind: "file".to_string(),
-            source_path: "src/lib.rs".to_string(),
-            content: "".to_string(),
-            token_count: 100,
-        });
-        packet.omitted_candidates.push(OmittedCandidate {
-            source_path: "src/lib_test.rs".to_string(),
-            reason: "lower_relevance_score".to_string(),
-            token_count: 50,
-        });
+        packet.included.push(included("src/lib.rs", 100));
+        packet
+            .omitted_candidates
+            .push(omitted("src/lib_test.rs", "lower_relevance_score", 50));
         let manifest = empty_manifest();
         let guard = RecallGuard::new(&packet, &manifest);
         assert!(guard.has_risk());
@@ -338,17 +372,10 @@ mod tests {
     #[test]
     fn flags_omitted_config_file() {
         let mut packet = empty_packet();
-        packet.included.push(IncludedItem {
-            kind: "file".to_string(),
-            source_path: "src/app.rs".to_string(),
-            content: "".to_string(),
-            token_count: 200,
-        });
-        packet.omitted_candidates.push(OmittedCandidate {
-            source_path: "config/app.yaml".to_string(),
-            reason: "budget_overflow".to_string(),
-            token_count: 30,
-        });
+        packet.included.push(included("src/app.rs", 200));
+        packet
+            .omitted_candidates
+            .push(omitted("config/app.yaml", "budget_overflow", 30));
         let manifest = empty_manifest();
         let guard = RecallGuard::new(&packet, &manifest);
         assert!(guard.has_risk());
@@ -360,17 +387,10 @@ mod tests {
     #[test]
     fn flags_budget_dropped_linked_file() {
         let mut packet = empty_packet();
-        packet.included.push(IncludedItem {
-            kind: "file".to_string(),
-            source_path: "src/main.rs".to_string(),
-            content: "".to_string(),
-            token_count: 300,
-        });
-        packet.omitted_candidates.push(OmittedCandidate {
-            source_path: "src/helper.rs".to_string(),
-            reason: "budget_overflow".to_string(),
-            token_count: 100,
-        });
+        packet.included.push(included("src/main.rs", 300));
+        packet
+            .omitted_candidates
+            .push(omitted("src/helper.rs", "budget_overflow", 100));
         let manifest = empty_manifest();
         let guard = RecallGuard::new(&packet, &manifest);
         assert!(guard.has_risk());
@@ -382,17 +402,10 @@ mod tests {
     #[test]
     fn flags_import_orphan() {
         let mut packet = empty_packet();
-        packet.included.push(IncludedItem {
-            kind: "file".to_string(),
-            source_path: "src/lib.rs".to_string(),
-            content: "".to_string(),
-            token_count: 100,
-        });
-        packet.omitted_candidates.push(OmittedCandidate {
-            source_path: "src/deps.rs".to_string(),
-            reason: "lower_relevance_score".to_string(),
-            token_count: 40,
-        });
+        packet.included.push(included("src/lib.rs", 100));
+        packet
+            .omitted_candidates
+            .push(omitted("src/deps.rs", "lower_relevance_score", 40));
         let mut manifest = empty_manifest();
         manifest.candidates.push(ContextCandidate {
             source_path: "src/deps.rs".to_string(),
@@ -414,17 +427,10 @@ mod tests {
     #[test]
     fn no_flag_for_unlinked_omission() {
         let mut packet = empty_packet();
-        packet.included.push(IncludedItem {
-            kind: "file".to_string(),
-            source_path: "src/main.rs".to_string(),
-            content: "".to_string(),
-            token_count: 100,
-        });
-        packet.omitted_candidates.push(OmittedCandidate {
-            source_path: "other/unrelated.rs".to_string(),
-            reason: "lower_relevance_score".to_string(),
-            token_count: 20,
-        });
+        packet.included.push(included("src/main.rs", 100));
+        packet
+            .omitted_candidates
+            .push(omitted("other/unrelated.rs", "lower_relevance_score", 20));
         let manifest = empty_manifest();
         let guard = RecallGuard::new(&packet, &manifest);
         // The omitted file is in a different directory, so it should not be flagged.
