@@ -6,6 +6,16 @@
  */
 
 /**
+ * Provider capability snapshots returned by provider-list APIs such as workspace/providers.
+ */
+export interface ProviderCapabilitiesList {
+  schema_version: 1;
+  /**
+   * @minItems 1
+   */
+  providers: [ProviderCapabilities, ...ProviderCapabilities[]];
+}
+/**
  * Per-provider, per-model capability snapshot. Loaded at startup; validated by `mimir providers doctor`. The gateway refuses calls if the packet's capability_snapshot does not match the current registry entry.
  */
 export interface ProviderCapabilities {

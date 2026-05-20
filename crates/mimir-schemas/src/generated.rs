@@ -4,6 +4,8 @@
 //! via `typify`. For now, each type is a minimal struct matching the schema shape
 //! so that downstream crates can compile.
 
+#![allow(missing_docs)]
+
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -17,7 +19,7 @@ pub struct ContextPacket {
     pub packet_id: String,
     pub packet_hash: String,
     pub run_id: String,
-    pub task_card: String,
+    pub task_card: TaskCard,
     pub mode: String,
     pub cap_tokens: u32,
     pub target_tokens: u32,
@@ -26,13 +28,13 @@ pub struct ContextPacket {
     pub provider: String,
     pub model: String,
     pub capability_snapshot_ref: String,
-    pub prompt_contract_version: String,
+    pub prompt_contract_version: u32,
     pub included: Vec<IncludedItem>,
     pub omitted_candidates: Vec<OmittedCandidate>,
     pub tool_schemas: Vec<ToolSchema>,
     pub evidence_cards: Vec<EvidenceCard>,
-    pub memory_entries: Vec<MemoryEntry>,
-    pub budget_ledger_ref: Option<String>,
+    pub memory_entries: Vec<ContextMemoryEntryRef>,
+    pub budget_ledger_ref: String,
     pub estimated_input_tokens: u32,
     pub count_provenance: String,
     pub created_at: String,
@@ -40,6 +42,25 @@ pub struct ContextPacket {
     /// High-risk omissions flagged by the recall guard (Stage 7).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recall_guard_flags: Vec<RecallGuardFlag>,
+}
+
+/// A compact task card carried by every context packet.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskCard {
+    pub goal: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acceptance_criteria: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub likely_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk_level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_test_command: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unknowns: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub need_for_large_context: Option<String>,
+    pub complexity: String,
 }
 
 /// A recall guard flag indicating a high-risk omission.
@@ -59,32 +80,69 @@ pub struct RecallGuardFlag {
 /// An included context item.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IncludedItem {
-    pub kind: String,
-    pub source_path: String,
-    pub content: String,
-    pub token_count: u32,
+    pub path: String,
+    pub ranges: Vec<ContextRange>,
+    pub candidate_kind: String,
+    pub reason_code: String,
+    pub tokens: u32,
+    pub source_hash: String,
+    pub trust_level: String,
+    pub editable: bool,
 }
 
 /// An omitted candidate with reason.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OmittedCandidate {
-    pub source_path: String,
-    pub reason: String,
-    pub token_count: u32,
+    pub schema_version: u32,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ranges: Vec<ContextRange>,
+    pub candidate_kind: String,
+    pub reason_code: String,
+    pub score: f64,
+    pub features: serde_json::Value,
+    pub estimated_tokens: u32,
+    pub discovered_by: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_hash: Option<String>,
+    pub reason_for_omission: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk: Option<String>,
+    pub what_would_trigger_inclusion: String,
+}
+
+/// A 1-indexed inclusive source range.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextRange {
+    pub start: u32,
+    pub end: u32,
 }
 
 /// A tool schema entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolSchema {
     pub name: String,
-    pub schema: serde_json::Value,
+    pub tokens: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred: Option<bool>,
 }
 
 /// Evidence card.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvidenceCard {
     pub kind: String,
-    pub content: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<u32>,
+}
+
+/// Memory entry reference included in a context packet.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextMemoryEntryRef {
+    pub entry_id: String,
+    pub tokens: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -219,12 +277,103 @@ pub struct ProviderCapabilities {
 pub struct PatchPlan {
     pub schema_version: u32,
     pub plan_id: String,
+    pub packet_id: String,
+    pub files_to_edit: Vec<PatchFileEdit>,
+    pub editable_target_set: Vec<String>,
+    pub reasoning_per_edit: Vec<PatchEditReasoning>,
+    pub tests_to_run: Vec<String>,
+    pub risks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub what_needs_more_context: Vec<String>,
+}
+
+/// A file the patch plan expects to edit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PatchFileEdit {
+    pub path: String,
+    pub edit_kind: PatchEditKind,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ranges: Vec<PatchRange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_new_content_hash: Option<String>,
+}
+
+/// The kind of planned edit.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PatchEditKind {
+    AstReplace,
+    LineRangeReplace,
+    UnifiedDiff,
+    WholeFileRewrite,
+}
+
+/// A line range referenced by a planned edit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PatchRange {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<u32>,
+}
+
+/// Reasoning for a planned edit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PatchEditReasoning {
+    pub path: String,
+    pub rationale: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disproving_evidence: Option<String>,
+}
+
+/// Persisted implementation-plan artifact written by `mimir plan`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanArtifact {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub packet_id: String,
+    pub packet_hash: String,
+    pub provider: String,
+    pub model: String,
+    pub task: String,
+    pub editable_target_set: Vec<String>,
+    pub steps: Vec<String>,
+    pub risks: Vec<String>,
+    pub files_likely_affected: Vec<String>,
+    pub tests_to_run: Vec<String>,
+    pub assumptions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_response: Option<String>,
+}
+
+/// Executable patch recipe used by Mimir's safe patch engine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutablePatchPlan {
+    pub schema_version: u32,
+    pub plan_id: String,
+    pub packet_id: String,
+    #[serde(deserialize_with = "deserialize_non_empty_patch_steps")]
     pub steps: Vec<PatchStep>,
+}
+
+fn deserialize_non_empty_patch_steps<'de, D>(deserializer: D) -> Result<Vec<PatchStep>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let steps = Vec::<PatchStep>::deserialize(deserializer)?;
+    if steps.is_empty() {
+        return Err(serde::de::Error::custom(
+            "steps must contain at least one patch step",
+        ));
+    }
+    Ok(steps)
 }
 
 /// A single patch step.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case")]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PatchStep {
     /// Replace a line range with new content.
     LineRange {
@@ -270,6 +419,153 @@ pub enum PatchStep {
         /// Destination path.
         to: String,
     },
+}
+
+#[cfg(test)]
+mod patch_plan_tests {
+    use super::{ExecutablePatchPlan, PatchEditKind, PatchPlan, PatchStep, PlanArtifact};
+
+    fn assert_example_validates(schema_json: &str, example_json: &str) {
+        let schema: serde_json::Value = serde_json::from_str(schema_json).unwrap();
+        let example: serde_json::Value = serde_json::from_str(example_json).unwrap();
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        let errors = validator
+            .iter_errors(&example)
+            .map(|error| error.to_string())
+            .collect::<Vec<_>>();
+
+        assert!(errors.is_empty(), "schema validation failed: {errors:#?}");
+    }
+
+    fn assert_example_rejected(schema_json: &str, example: serde_json::Value) {
+        let schema: serde_json::Value = serde_json::from_str(schema_json).unwrap();
+        let validator = jsonschema::validator_for(&schema).unwrap();
+
+        assert!(
+            !validator.is_valid(&example),
+            "schema unexpectedly accepted {example}"
+        );
+    }
+
+    #[test]
+    fn deserializes_patch_plan_example() {
+        assert_example_validates(
+            include_str!("../../../schemas/PatchPlan.schema.json"),
+            include_str!("../../../examples/patch-plan.example.json"),
+        );
+
+        let plan: PatchPlan =
+            serde_json::from_str(include_str!("../../../examples/patch-plan.example.json"))
+                .unwrap();
+
+        assert_eq!(plan.schema_version, 1);
+        assert_eq!(plan.files_to_edit[0].edit_kind, PatchEditKind::AstReplace);
+        assert_eq!(plan.editable_target_set[0], "src/auth/session.ts");
+    }
+
+    #[test]
+    fn deserializes_executable_patch_plan_example() {
+        assert_example_validates(
+            include_str!("../../../schemas/ExecutablePatchPlan.schema.json"),
+            include_str!("../../../examples/executable-patch-plan.example.json"),
+        );
+
+        let plan: ExecutablePatchPlan = serde_json::from_str(include_str!(
+            "../../../examples/executable-patch-plan.example.json"
+        ))
+        .unwrap();
+
+        assert_eq!(plan.schema_version, 1);
+        assert!(matches!(
+            plan.steps[0],
+            PatchStep::UnifiedDiff { ref path, .. } if path == "src/auth/session.ts"
+        ));
+    }
+
+    #[test]
+    fn deserializes_plan_artifact_example() {
+        assert_example_validates(
+            include_str!("../../../schemas/PlanArtifact.schema.json"),
+            include_str!("../../../examples/plan-artifact.example.json"),
+        );
+
+        let artifact: PlanArtifact =
+            serde_json::from_str(include_str!("../../../examples/plan-artifact.example.json"))
+                .unwrap();
+        assert_eq!(artifact.schema_version, 1);
+        assert_eq!(artifact.task, "Plan the session refresh fix");
+    }
+
+    #[test]
+    fn executable_patch_plan_schema_rejects_incomplete_payloads() {
+        let schema = include_str!("../../../schemas/ExecutablePatchPlan.schema.json");
+        assert_example_rejected(
+            schema,
+            serde_json::json!({
+                "schema_version": 1,
+                "plan_id": "plan-example",
+                "steps": [{
+                    "action": "delete",
+                    "path": "src/auth/session.ts"
+                }]
+            }),
+        );
+        assert_example_rejected(
+            schema,
+            serde_json::json!({
+                "schema_version": 1,
+                "plan_id": "plan-example",
+                "packet_id": "packet-example",
+                "steps": []
+            }),
+        );
+        assert_example_rejected(
+            schema,
+            serde_json::json!({
+                "schema_version": 1,
+                "plan_id": "plan-example",
+                "packet_id": "packet-example",
+                "steps": [{
+                    "action": "delete",
+                    "path": "src/auth/session.ts",
+                    "extra": true
+                }]
+            }),
+        );
+    }
+
+    #[test]
+    fn rust_executable_patch_plan_deserializer_is_strict() {
+        let missing_packet = serde_json::json!({
+            "schema_version": 1,
+            "plan_id": "plan-example",
+            "steps": [{
+                "action": "delete",
+                "path": "src/auth/session.ts"
+            }]
+        });
+        assert!(serde_json::from_value::<ExecutablePatchPlan>(missing_packet).is_err());
+
+        let empty_steps = serde_json::json!({
+            "schema_version": 1,
+            "plan_id": "plan-example",
+            "packet_id": "packet-example",
+            "steps": []
+        });
+        assert!(serde_json::from_value::<ExecutablePatchPlan>(empty_steps).is_err());
+
+        let extra_step_field = serde_json::json!({
+            "schema_version": 1,
+            "plan_id": "plan-example",
+            "packet_id": "packet-example",
+            "steps": [{
+                "action": "delete",
+                "path": "src/auth/session.ts",
+                "extra": true
+            }]
+        });
+        assert!(serde_json::from_value::<ExecutablePatchPlan>(extra_step_field).is_err());
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -9,10 +9,13 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc --declaration --emitDeclarationOnly --outFile index.d.ts *.ts",
-    "clean": "rm -f index.d.ts"
+    "generate": "node scripts/generate.mjs",
+    "build": "node scripts/build.mjs",
+    "check:schema-drift": "node scripts/check-drift.mjs",
+    "clean": "node -e \"require('node:fs').rmSync('index.d.ts',{force:true})\""
   },
   "devDependencies": {
+    "json-schema-to-typescript": "^15.0.4",
     "typescript": "^5.0.0"
   },
   "license": "Apache-2.0",

@@ -4,9 +4,9 @@
   "models": {
     "claude-sonnet-4-6": {
       "max_context_tokens": 1000000,
-      "max_input_tokens": 992000,
-      "max_output_tokens": 8192,
-      "output_reserve_tokens": 8192,
+      "max_input_tokens": 935488,
+      "max_output_tokens": 64000,
+      "output_reserve_tokens": 64000,
       "counts_system_tokens": true,
       "counts_tool_schemas": true,
       "counts_tool_results": true,

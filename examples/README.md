@@ -15,6 +15,7 @@ Hermes uses these to:
 | `context-packet.example.json` | `ContextPacket.schema.json` |
 | `budget-ledger.example.json` | `BudgetLedger.schema.json` |
 | `provider-capabilities.example.json` | `ProviderCapabilities.schema.json` |
+| `provider-capabilities-list.example.json` | `ProviderCapabilitiesList.schema.json` |
 | `context-candidate.example.json` | `ContextCandidate.schema.json` |
 | `omitted-candidate.example.json` | `OmittedCandidate.schema.json` |
 | `candidate-manifest.example.json` | `CandidateManifest.schema.json` |
@@ -22,6 +23,8 @@ Hermes uses these to:
 | `tool-result-card.example.json` | `ToolResultCard.schema.json` |
 | `test-card.example.json` | `TestCard.schema.json` |
 | `patch-plan.example.json` | `PatchPlan.schema.json` |
+| `executable-patch-plan.example.json` | `ExecutablePatchPlan.schema.json` |
+| `plan-artifact.example.json` | `PlanArtifact.schema.json` |
 | `override-request.example.json` | `OverrideRequest.schema.json` |
 | `eval-case.example.yaml` | `EvalCase.schema.json` (YAML form) |
 | `audit-event.example.json` | `AuditEvent.schema.json` |
@@ -37,3 +40,5 @@ Hermes uses these to:
 ## Validation
 
 `npm run validate:examples` runs `scripts/validate-examples.mjs`, which loads every schema into Ajv 2020 with `ajv-formats`, validates every example, and runs semantic consistency checks for budget math, editable targets, omitted-candidate rejection, error-code references, and TOML snippet duplicate keys. CI runs it on every PR.
+
+`provider-capabilities.example.json` shows one `ProviderCapabilities` document, which is the same single-provider shape local YAML files must use. `provider-capabilities-list.example.json` shows the plural `ProviderCapabilitiesList` response returned by provider-list APIs.

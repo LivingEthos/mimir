@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "run_id": "20260518-141522-a3f9b2c1",
+  "packet_id": "pkt-20260518-141522-a3f9b2c1",
+  "packet_hash": "a3f9b2c14e8d1c5f6b7a8e9d0c1b2a3f4e5d6c7b8a9e0d1c2b3a4e5d6c7b8a9e",
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-20250514",
+  "task": "Plan the session refresh fix",
+  "editable_target_set": ["src/auth/session.ts"],
+  "steps": ["Inspect token refresh flow", "Update stale-token handling", "Run session tests"],
+  "risks": ["Refresh behavior is security-sensitive"],
+  "files_likely_affected": ["src/auth/session.ts", "tests/auth/session.test.ts"],
+  "tests_to_run": ["pnpm test auth/session.test.ts"],
+  "assumptions": ["The current packet includes the failing test reference"]
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimir.dev/schemas/ProviderCapabilitiesList.schema.json",
+  "title": "ProviderCapabilitiesList",
+  "description": "Provider capability snapshots returned by provider-list APIs such as workspace/providers.",
+  "type": "object",
+  "required": ["schema_version", "providers"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "providers": {
+      "type": "array",
+      "items": { "$ref": "https://mimir.dev/schemas/ProviderCapabilities.schema.json" },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,6 +1,6 @@
 # Mimir JSON Schemas
 
-These schemas are normative. The Rust and TypeScript types in `mimir-schemas` and `@mimir/sdk` are generated from these files.
+These schemas are normative. Rust and TypeScript types in `mimir-schemas` and `@mimir/sdk` mirror these files; until the generator pipeline is wired end-to-end, keep schema/type changes synchronized deliberately.
 
 ## Conventions
 
@@ -23,6 +23,7 @@ These schemas are normative. The Rust and TypeScript types in `mimir-schemas` an
 | `ContextPacket.schema.json` | ContextPacket |
 | `BudgetLedger.schema.json` | BudgetLedger |
 | `ProviderCapabilities.schema.json` | ProviderCapabilities |
+| `ProviderCapabilitiesList.schema.json` | ProviderCapabilitiesList |
 | `ContextCandidate.schema.json` | ContextCandidate |
 | `OmittedCandidate.schema.json` | OmittedCandidate |
 | `CandidateManifest.schema.json` | CandidateManifest |
@@ -30,6 +31,8 @@ These schemas are normative. The Rust and TypeScript types in `mimir-schemas` an
 | `ToolResultCard.schema.json` | ToolResultCard |
 | `TestCard.schema.json` | TestCard |
 | `PatchPlan.schema.json` | PatchPlan |
+| `ExecutablePatchPlan.schema.json` | ExecutablePatchPlan |
+| `PlanArtifact.schema.json` | PlanArtifact |
 | `ReviewResult.schema.json` | ReviewResult |
 | `EvidenceSummary.schema.json` | EvidenceSummary |
 | `OverrideRequest.schema.json` | OverrideRequest |
@@ -51,3 +54,8 @@ npm run validate:examples
 ```
 
 CI runs this on every PR.
+
+`ExecutablePatchPlan.schema.json` describes persisted executable patch recipes and requires a
+non-empty `steps` array plus `packet_id`. The Rust persisted type enforces the same shape. For
+backwards-compatible provider parsing, the CLI may accept legacy/raw executable payloads without
+`packet_id`, bind them to the current context packet, and only then write schema-shaped artifacts.

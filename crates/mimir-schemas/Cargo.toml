@@ -11,6 +11,9 @@ repository.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+[dev-dependencies]
+jsonschema = { workspace = true }
+
 [build-dependencies]
 typify = { workspace = true }
 serde_json = { workspace = true }
