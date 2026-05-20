@@ -19,25 +19,60 @@ const archMap = {
   x64: 'x64',
 };
 
-const platformKey = `${platformMap[platform]}-${archMap[arch]}`;
+const mappedPlatform = platformMap[platform];
+const mappedArch = archMap[arch];
+
+function fail(message) {
+  console.error(`Mimir CLI install failed: ${message}`);
+  console.error(
+    'The @mimir/cli package requires a matching @mimir/cli-<platform>-<arch> optional dependency.',
+  );
+  process.exit(1);
+}
+
+if (!mappedPlatform || !mappedArch) {
+  fail(`unsupported platform ${platform}-${arch}`);
+}
+
+const platformKey = `${mappedPlatform}-${mappedArch}`;
 const binaryName = platform === 'win32' ? 'mimir.exe' : 'mimir';
+const targetName =
+  platform === 'win32' ? `mimir-${platformKey}.exe` : `mimir-${platformKey}`;
 
 // Try to find the platform-specific package
 const optionalDep = `@mimir/cli-${platformKey}`;
-const depPath = path.join(__dirname, 'node_modules', optionalDep);
+const depCandidates = [
+  path.join(__dirname, 'node_modules', optionalDep),
+  path.join(path.dirname(__dirname), `cli-${platformKey}`),
+  path.join(path.dirname(path.dirname(__dirname)), optionalDep),
+];
+let depPath;
 
-if (fs.existsSync(depPath)) {
-  const binPath = path.join(depPath, binaryName);
-  if (fs.existsSync(binPath)) {
-    const targetPath = path.join(__dirname, 'bin', binaryName);
-    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-    fs.copyFileSync(binPath, targetPath);
-    fs.chmodSync(targetPath, 0o755);
-    console.log(`Mimir CLI installed: ${targetPath}`);
-    process.exit(0);
-  }
+try {
+  depPath = path.dirname(
+    require.resolve(`${optionalDep}/package.json`, { paths: [__dirname] }),
+  );
+} catch (_) {
+  depPath = depCandidates.find((candidate) => fs.existsSync(candidate));
 }
 
-console.warn(`Platform binary not found for ${platformKey}. Building from source...`);
-console.warn('Install Rust and run: cargo install mimir-cli');
+if (!depPath) {
+  fail(`platform package ${optionalDep} was not found`);
+}
+
+const sourceCandidates = [
+  path.join(depPath, binaryName),
+  path.join(depPath, 'bin', binaryName),
+];
+const sourcePath = sourceCandidates.find((candidate) => fs.existsSync(candidate));
+
+if (!sourcePath) {
+  fail(`platform package ${optionalDep} does not contain ${binaryName}`);
+}
+
+const targetPath = path.join(__dirname, 'bin', targetName);
+fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+fs.copyFileSync(sourcePath, targetPath);
+fs.chmodSync(targetPath, 0o755);
+console.log(`Mimir CLI installed: ${targetPath}`);
 process.exit(0);

@@ -13,9 +13,12 @@ npm install -g @mimir/cli
 ```bash
 mimir --help
 mimir init
-mimir ask "How does session refresh work?"
-mimir code "Fix the session refresh bug"
+mimir plan --editable src/session.ts "Plan the session refresh fix"
+mimir code --editable src/session.ts --dry-run "Fix the session refresh bug"
+mimir code --editable src/session.ts "Fix the session refresh bug"
 ```
+
+`mimir code` refuses to run without `--editable` paths. Provider credentials are read from environment variables such as `GLM_API_KEY`, `ZAI_API_KEY`, or `OPENAI_API_KEY`; do not put keys in prompts or files.
 
 ## Platforms
 

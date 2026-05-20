@@ -1,4 +1,71 @@
-#!/bin/sh
-# Fallback wrapper — platform-specific binary should be installed by install.js
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-"$SCRIPT_DIR/mimir" "$@"
+#!/usr/bin/env node
+'use strict';
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawn } = require('child_process');
+
+const platformMap = {
+  darwin: 'darwin',
+  linux: 'linux',
+  win32: 'win32',
+};
+
+const archMap = {
+  arm64: 'arm64',
+  x64: 'x64',
+};
+
+const platform = os.platform();
+const arch = os.arch();
+const mappedPlatform = platformMap[platform];
+const mappedArch = archMap[arch];
+
+if (!mappedPlatform || !mappedArch) {
+  console.error(`Mimir CLI does not ship a binary for ${platform}-${arch}.`);
+  process.exit(1);
+}
+
+const platformKey = `${mappedPlatform}-${mappedArch}`;
+const extension = platform === 'win32' ? '.exe' : '';
+const binaryPath = path.join(__dirname, `mimir-${platformKey}${extension}`);
+
+if (!fs.existsSync(binaryPath)) {
+  console.error(
+    [
+      `Mimir CLI platform binary is missing for ${platformKey}.`,
+      `Expected: ${binaryPath}`,
+      `The @mimir/cli postinstall step should install @mimir/cli-${platformKey}.`,
+      'Reinstall @mimir/cli with optional dependencies enabled or install a native Mimir release.',
+    ].join('\n'),
+  );
+  process.exit(1);
+}
+
+const child = spawn(binaryPath, process.argv.slice(2), { stdio: 'inherit' });
+const signalExitCodes = {
+  SIGHUP: 129,
+  SIGINT: 130,
+  SIGTERM: 143,
+};
+
+for (const signal of Object.keys(signalExitCodes)) {
+  process.on(signal, () => {
+    if (!child.killed) {
+      child.kill(signal);
+    }
+  });
+}
+
+child.on('error', (error) => {
+  console.error(`Failed to launch ${binaryPath}: ${error.message}`);
+  process.exit(1);
+});
+
+child.on('exit', (code, signal) => {
+  if (signal) {
+    process.exit(signalExitCodes[signal] || 1);
+  }
+  process.exit(code === null ? 1 : code);
+});
