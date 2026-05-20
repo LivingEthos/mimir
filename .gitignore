@@ -2,6 +2,9 @@
 /target
 Cargo.lock
 
+# JavaScript dependencies
+node_modules/
+
 # IDE
 .idea/
 .vscode/
@@ -15,6 +18,7 @@ Thumbs.db
 
 # Mimir runtime
 .mimir/
+.serena/
 
 # Test artifacts
 *.tmp

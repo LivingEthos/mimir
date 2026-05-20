@@ -136,3 +136,46 @@ To continue development:
 4. Create branch `phase7/packaging`
 5. Implement Phase 7 features
 6. Run multi-model review at milestone
+
+## Cleanup Note - 2026-05-20
+
+The worktree contains several coherent dirty buckets from the production-hardening passes. Keep them separate when reviewing or committing:
+
+1. Provider gateway boundary hardening: `crates/mimir-providers/src/{adapters,capabilities.rs,gateway.rs,lib.rs,count.rs,stream.rs}`, `crates/mimir-cli/src/main.rs`, `crates/mimir-cli/tests/provider_plan_code.rs`, `crates/mimir-server/src/{lsp.rs,rpc.rs}`, `crates/mimir-server/tests/server_integration.rs`, `providers/anthropic.yaml`, and `scripts/check-gateway-boundary.sh`.
+2. CLI plan/code safety and repair hardening: `crates/mimir-cli/src/main.rs`, `crates/mimir-cli/tests/integration_phase6.rs`, `crates/mimir-edit/src/{apply.rs,backup.rs,git.rs,lib.rs,repair.rs,test_runner.rs}`, `crates/mimir-security/src/{lib.rs,redactor.rs}`, and related context/runs/review changes.
+3. Schema, SDK, and example synchronization: `schemas/*.schema.json`, `schemas/README.md`, `examples/*.example.json`, `examples/README.md`, `packages/sdk/*.ts`, `packages/sdk/index.d.ts`, `packages/sdk/scripts/*.mjs`, `packages/sdk/package.json`, and `packages/sdk/package-lock.json`. The TypeScript schema mirrors and `index.d.ts` are generated; regenerate with `cd packages/sdk && npm run generate && npm run check:schema-drift && npm run build`.
+4. Package distribution fixes: `packages/cli/bin/mimir`, `packages/cli/install.js`, and `packages/cli/README.md`.
+5. Review and cleanup handoff material: `MIMIR-CLI-CODEBASE-REVIEW.md`, this note, and `scripts/validate-production.sh`.
+
+Recommended commit order:
+
+1. Gateway boundary and provider capability registry.
+2. Schema/API wire-shape changes plus regenerated SDK and examples.
+3. CLI plan/code execution, patch safety, artifact caps, and repair loop.
+4. Package distribution wrapper/install fixes.
+5. Validation script and handoff/review docs.
+
+Validation commands:
+
+```bash
+cargo fmt --all -- --check
+git diff --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --all-targets
+cargo test -p mimir-context -p mimir-providers -p mimir-schemas --doc
+cargo build --release
+./scripts/check-gateway-boundary.sh
+cargo audit
+cargo deny check
+npm --prefix packages/sdk run generate
+npm --prefix packages/sdk run check:schema-drift
+npm --prefix packages/sdk run build
+node --check packages/cli/bin/mimir
+node --check packages/cli/install.js
+node --check packages/sdk/scripts/generate.mjs
+node --check packages/sdk/scripts/check-drift.mjs
+node --check packages/sdk/scripts/build.mjs
+npm --prefix .. run validate:examples
+```
+
+`cargo deny check` is expected to pass with warning-only notices for duplicate versions, wildcard path dependencies, and license allow-list entries that do not currently match a used crate. Provider credentials must stay environment-only; use only synthetic values in tests and fixtures.
