@@ -33,7 +33,7 @@
 - `npm pack --dry-run --json` passes for the private `@mimir/sdk`, all five private `@mimir/cli-*` platform packages, and private root `@mimir/cli`.
 - Homebrew formula checksums are populated for all macOS/Linux archives; `update-homebrew-checksums.mjs --check` and strict platform verification both pass against `target/distrib/`.
 - `scripts/stage-npm-platform-package.mjs` now rejects missing flag values and unknown arguments instead of falling back to host defaults.
-- npm registry publication is disabled by policy. The canonical GitHub repository is now `MisterWonderful/mimir`; local `origin`, package metadata, Homebrew URLs, and release tooling have been reattached to it. The stale local `v1.0.0` tag that pointed at `136771a` has been deleted so it cannot be pushed accidentally.
+- npm registry publication is disabled by policy. The canonical GitHub repository is now `LivingEthos/mimir`; package metadata, Homebrew URLs, and release tooling are attached to it. Mimir is source-visible under the Mimir Public Source License, not Apache-2.0.
 
 ## Completed Phases
 
@@ -126,7 +126,7 @@ Per 15-PHASES.md:
    - `mimir-cli`, private `@mimir/cli`, private `@mimir/sdk`, private Node platform-package manifests, and Homebrew artifact URL names are aligned to v1.0.0 / cargo-dist `mimir-cli-*` artifacts.
    - All five native platform packages have staged binaries and pass `npm pack --dry-run`.
    - Homebrew checksums match the local macOS/Linux cargo-dist archives.
-   - Remaining release work: push from a GitHub account with write access, run CI on the exact release commit, create the `v1.0.0` tag, upload GitHub release assets, and then run Homebrew smoke checks against the live asset URLs.
+   - Remaining release work: run CI on the exact source-visible release commit, ensure no public tag/release points at superseded Apache-2.0 metadata, upload GitHub release assets, and then run Homebrew smoke checks against the live asset URLs.
 
 6. **Context sharing / packet replay** — portable replay bundles now wired
    - `mimir packet share <run-id>` writes a redacted `mimir.packet_share` bundle by default, with the schema-valid packet plus the redacted provider request and checksums.
@@ -141,7 +141,7 @@ Per 15-PHASES.md:
    - The command writes schema-valid `EvalResult` arrays under `.mimir/evals/` and prints aggregate recall, precision, cap compliance, and whether mode 4 beats mode 0 on mean file recall.
    - Current local release-binary smoke reports cap compliance and mode 4 beating mode 0, with partial full-recall case pass counts still visible in the summary.
 
-8. **Tag v1.0.0** — pending GitHub release assets, Homebrew live-URL smoke checks, and green CI on the release commit
+8. **Tag v1.0.0** — release tag must point at the source-visible license commit before public release assets are exposed
 
 9. **Agent workflow productization** — provider-free entry points now wired
    - `init`, `context suggest`, `check`, and `explore` expose the large-codebase workflow as reusable CLI features.
@@ -194,7 +194,7 @@ mimir check --ci
 - Parent handoff/spec docs still contain older command names in places; `docs/context-packets.md` and the CLI help reflect the current packet lifecycle.
 - Code-mode `.mimir/commands/*.md` recipes are executable through `mimir code --recipe`; seeded ask-mode validation recipes are still documented workflow material until an ask/validation recipe runner is added.
 - `mimir explore` uses deterministic read-only local search evidence; richer provider-backed exploration remains future work.
-- Full production validation passes locally; final release still needs GitHub write access, green CI on the exact release commit, a new correct `v1.0.0` tag, uploaded GitHub release assets, and Homebrew smoke checks against the live asset URLs.
+- Full production validation passes locally; final release still needs green CI on the exact source-visible release commit, a correct public `v1.0.0` tag, uploaded GitHub release assets, and Homebrew smoke checks against the live asset URLs.
 
 ## Handoff Instructions
 To continue development:

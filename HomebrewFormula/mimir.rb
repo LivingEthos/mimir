@@ -1,25 +1,25 @@
 class Mimir < Formula
-  desc "Replayable Context for coding agents"
-  homepage "https://github.com/MisterWonderful/mimir"
-  license "Apache-2.0"
+  desc "Context-governed coding CLI for more accurate AI edits"
+  homepage "https://github.com/LivingEthos/mimir"
+  license :cannot_represent
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/MisterWonderful/mimir/releases/download/v1.0.0/mimir-cli-aarch64-apple-darwin.tar.xz"
-      sha256 "773ad7851001cf1725bf50db5fd15697c2754a82c09c7f168412035b3ef188c4"
+      url "https://github.com/LivingEthos/mimir/releases/download/v1.0.0/mimir-cli-aarch64-apple-darwin.tar.xz"
+      sha256 "7d6e364ee6b77e0a141048d0dcb6a994c12b8813702f8daf34ca79d529e68db7"
     else
-      url "https://github.com/MisterWonderful/mimir/releases/download/v1.0.0/mimir-cli-x86_64-apple-darwin.tar.xz"
-      sha256 "2cf9f5e5eb23af7b57b7b08c73b81aeddaccfcb4d6ea1ad9fd1a0dd7ca5bb3e7"
+      url "https://github.com/LivingEthos/mimir/releases/download/v1.0.0/mimir-cli-x86_64-apple-darwin.tar.xz"
+      sha256 "c39216591bc8540ef60c68af490014870636696ed378518e1971743b3a6e4f64"
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/MisterWonderful/mimir/releases/download/v1.0.0/mimir-cli-aarch64-unknown-linux-gnu.tar.xz"
-      sha256 "bf2300a5e89cab374b856710326a51853459de820cd8a7eb8906b74b768ad6da"
+      url "https://github.com/LivingEthos/mimir/releases/download/v1.0.0/mimir-cli-aarch64-unknown-linux-gnu.tar.xz"
+      sha256 "2f0702bbac0a3f6ac5e8fd4b74d2d3528a27867b03d01f3979884219bb4dac59"
     else
-      url "https://github.com/MisterWonderful/mimir/releases/download/v1.0.0/mimir-cli-x86_64-unknown-linux-gnu.tar.xz"
-      sha256 "4d022aafe48a965fc3b945b46b0138e5e0867fab9e128977502be0b102de0c18"
+      url "https://github.com/LivingEthos/mimir/releases/download/v1.0.0/mimir-cli-x86_64-unknown-linux-gnu.tar.xz"
+      sha256 "528a17f761169eb013cd79d2429e5cf74db30c088aa87f1cd90acfb0fb6f3256"
     end
   end
 

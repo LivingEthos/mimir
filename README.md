@@ -1,10 +1,17 @@
 # Mimir
 
-Replayable Context for coding agents.
+Context-governed coding CLI for more accurate AI edits.
 
 ## Overview
 
-Mimir is a coding CLI built around a Context Governor that produces hashable, replayable context packets capped at ~64k tokens by default. Every prompt is an inspectable, shareable, replayable manifest.
+Mimir is a coding CLI built around ideal context limits. Instead of sending a
+loose pile of files to a model, Mimir indexes the repository, selects the
+highest-signal evidence, fits it inside an explicit token budget, and writes a
+hashable context packet before any provider call.
+
+The result is a more accurate coding loop: inspectable context, bounded edit
+targets, replayable prompts, redacted artifacts, source-controlled checks, and a
+fail-closed patch flow that makes AI edits easier to trust.
 
 ## Quick Start
 
@@ -109,4 +116,7 @@ cargo build --release
 
 ## License
 
-Apache-2.0
+Mimir is source-visible, not open source. You may view, clone, build, and run it
+for evaluation, but copying, redistribution, derivative works, commercial use,
+or integration into another project or service requires prior written permission
+from Living Ethos. See [LICENSE](LICENSE).

@@ -115,7 +115,7 @@ Use this recipe before release handoff or after changes that cross multiple work
 
 #[derive(Parser)]
 #[command(name = "mimir")]
-#[command(about = "Replayable Context for coding agents")]
+#[command(about = "Context-governed coding CLI for more accurate AI edits")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
     #[command(subcommand)]

@@ -24,6 +24,7 @@ allow = [
     "OpenSSL",
     "Zlib",
     "CDLA-Permissive-2.0",
+    "LicenseRef-Mimir-Public-Source",
 ]
 confidence-threshold = 0.8
 

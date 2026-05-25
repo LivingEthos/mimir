@@ -24,9 +24,9 @@ members = [
 [workspace.package]
 edition = "2021"
 rust-version = "1.83"
-license = "Apache-2.0"
-authors = ["Mimir contributors"]
-repository = "https://github.com/MisterWonderful/mimir"
+license = "LicenseRef-Mimir-Public-Source"
+authors = ["Living Ethos"]
+repository = "https://github.com/LivingEthos/mimir"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
