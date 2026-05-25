@@ -13,6 +13,23 @@ The result is a more accurate coding loop: inspectable context, bounded edit
 targets, replayable prompts, redacted artifacts, source-controlled checks, and a
 fail-closed patch flow that makes AI edits easier to trust.
 
+## Install
+
+```bash
+brew tap LivingEthos/mimir
+brew install mimir
+mimir --version
+```
+
+For source evaluation:
+
+```bash
+git clone https://github.com/LivingEthos/mimir.git
+cd mimir
+cargo build --release
+./target/release/mimir --version
+```
+
 ## Quick Start
 
 ```bash
