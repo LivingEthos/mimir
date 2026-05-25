@@ -1,7 +1,6 @@
 class Mimir < Formula
   desc "Replayable Context for coding agents"
-  homepage "https://mimir.dev"
-  version "1.0.0"
+  homepage "https://github.com/MisterWonderful/mimir"
   license "Apache-2.0"
 
   on_macos do

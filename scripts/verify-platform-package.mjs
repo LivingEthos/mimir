@@ -232,8 +232,8 @@ function verifyHomebrewFormula(rootVersion) {
     fail(`missing Homebrew formula: ${formulaPath}`);
   }
   const formula = fs.readFileSync(formulaPath, "utf8");
-  if (!formula.includes(`version "${rootVersion}"`)) {
-    fail(`Homebrew formula version does not match ${rootVersion}`);
+  if (/\bversion\s+"/.test(formula)) {
+    fail("Homebrew formula must not declare a redundant version; Homebrew infers it from release URLs");
   }
 
   let placeholders = 0;

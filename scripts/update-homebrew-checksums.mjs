@@ -70,11 +70,23 @@ function formulaUrl(version, rustTarget) {
 }
 
 function formulaVersion(formula) {
-  const match = /\bversion "([^"]+)"/.exec(formula);
-  if (!match) {
-    fail("Homebrew formula is missing version");
+  const explicitMatch = /\bversion "([^"]+)"/.exec(formula);
+  if (explicitMatch) {
+    return explicitMatch[1];
   }
-  return match[1];
+
+  const versions = new Set(
+    [...formula.matchAll(/github\.com\/MisterWonderful\/mimir\/releases\/download\/v([^/]+)\/mimir-cli-/g)].map(
+      (match) => match[1],
+    ),
+  );
+  if (versions.size === 0) {
+    fail("Homebrew formula is missing Mimir release URLs");
+  }
+  if (versions.size > 1) {
+    fail(`Homebrew formula has mixed release versions: ${[...versions].sort().join(", ")}`);
+  }
+  return [...versions][0];
 }
 
 function replaceChecksumAfterUrl(formula, url, sha256) {
