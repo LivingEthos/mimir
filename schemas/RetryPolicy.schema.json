@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimir.dev/schemas/RetryPolicy.schema.json",
+  "title": "RetryPolicy",
+  "description": "Backoff and retryable-code configuration used by the provider gateway and tool runtime.",
+  "type": "object",
+  "required": ["schema_version", "max_attempts", "initial_backoff_ms", "max_backoff_ms", "jitter", "retryable_codes"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "max_attempts": { "type": "integer", "minimum": 1 },
+    "initial_backoff_ms": { "type": "integer", "minimum": 0 },
+    "max_backoff_ms": { "type": "integer", "minimum": 0 },
+    "jitter": { "type": "number", "minimum": 0, "maximum": 1 },
+    "retryable_codes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "provider_rate_limited",
+          "provider_overloaded",
+          "provider_timeout",
+          "provider_connection_reset",
+          "provider_internal_error",
+          "provider_stream_disconnected"
+        ]
+      }
+    }
+  },
+  "additionalProperties": false
+}

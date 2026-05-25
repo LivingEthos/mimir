@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimir.dev/schemas/TraceSpan.schema.json",
+  "title": "TraceSpan",
+  "description": "OpenTelemetry-shaped span emitted by the telemetry crate. Stored as JSONL under .mimir/runs/<run_id>/trace.spans.jsonl. Never exported over the network unless an explicit endpoint is configured.",
+  "type": "object",
+  "required": ["schema_version", "span_id", "name", "start_us", "end_us"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "span_id": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+    "trace_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "parent_id": { "type": ["string", "null"], "pattern": "^[0-9a-f]{16}$" },
+    "name": { "type": "string" },
+    "kind": { "type": "string", "enum": ["internal", "client", "server", "producer", "consumer"], "default": "internal" },
+    "start_us": { "type": "integer", "minimum": 0, "description": "Unix microseconds." },
+    "end_us": { "type": "integer", "minimum": 0 },
+    "attrs": {
+      "type": "object",
+      "description": "Attributes. Keep keys snake_case. No secrets.",
+      "additionalProperties": true
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["at_us", "name"],
+        "properties": {
+          "at_us": { "type": "integer", "minimum": 0 },
+          "name": { "type": "string" },
+          "attrs": { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
+    "status": {
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "enum": ["unset", "ok", "error"] },
+        "message": { "type": ["string", "null"] }
+      }
+    }
+  },
+  "additionalProperties": false
+}

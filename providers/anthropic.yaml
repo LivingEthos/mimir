@@ -1,0 +1,57 @@
+schema_version: 1
+provider: anthropic
+models:
+  claude-sonnet-4-6:
+    max_context_tokens: 1000000
+    max_input_tokens: 935488
+    max_output_tokens: 64000
+    output_reserve_tokens: 64000
+    counts_system_tokens: true
+    counts_tool_schemas: true
+    counts_tool_results: true
+    counts_reasoning_tokens: false
+    supports_server_token_count: true
+    supports_prompt_cache: true
+    overflow_behavior: validation_error
+    pricing:
+      input_per_million: 3.0
+      output_per_million: 15.0
+      cache_write_per_million: 3.75
+      cache_read_per_million: 0.30
+    count_drift_p95_observed: null
+  claude-sonnet-4-20250514:
+    max_context_tokens: 1000000
+    max_input_tokens: 935488
+    max_output_tokens: 64000
+    output_reserve_tokens: 64000
+    counts_system_tokens: true
+    counts_tool_schemas: true
+    counts_tool_results: true
+    counts_reasoning_tokens: false
+    supports_server_token_count: true
+    supports_prompt_cache: true
+    overflow_behavior: validation_error
+    pricing:
+      input_per_million: 3.0
+      output_per_million: 15.0
+      cache_write_per_million: 3.75
+      cache_read_per_million: 0.30
+    count_drift_p95_observed: null
+  claude-haiku-4-5:
+    max_context_tokens: 200000
+    max_input_tokens: 135488
+    max_output_tokens: 64000
+    output_reserve_tokens: 64000
+    counts_system_tokens: true
+    counts_tool_schemas: true
+    counts_tool_results: true
+    counts_reasoning_tokens: false
+    supports_server_token_count: true
+    supports_prompt_cache: true
+    overflow_behavior: validation_error
+    pricing:
+      input_per_million: 1.00
+      output_per_million: 5.00
+      cache_write_per_million: 1.00
+      cache_read_per_million: 0.08
+    count_drift_p95_observed: null

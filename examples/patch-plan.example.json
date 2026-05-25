@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "plan_id": "plan-1",
+  "packet_id": "01941a8e-2d3f-7c45-9c1f-1e23b8a8c1e7",
+  "files_to_edit": [
+    {
+      "path": "src/auth/session.ts",
+      "edit_kind": "ast_replace",
+      "ranges": [{ "start": 60, "end": 120 }]
+    }
+  ],
+  "editable_target_set": ["src/auth/session.ts"],
+  "reasoning_per_edit": [
+    {
+      "path": "src/auth/session.ts",
+      "rationale": "The validateSession function reuses the cached token before checking expiry. Move the expiry check before the cache lookup so an expired token triggers a refresh.",
+      "disproving_evidence": "If the test still fails after this change, the cache key must be wrong elsewhere; check src/auth/cache.ts."
+    }
+  ],
+  "tests_to_run": ["pnpm test auth/session.test.ts"],
+  "risks": [
+    "Other callers of validateSession may not expect the function to perform a refresh; check src/auth/index.ts and src/api/routes/login.ts."
+  ],
+  "what_needs_more_context": []
+}

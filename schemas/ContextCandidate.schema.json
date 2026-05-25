@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimir.dev/schemas/ContextCandidate.schema.json",
+  "title": "ContextCandidate",
+  "description": "A single candidate emitted by retrieval. Candidates are either packed into the ContextPacket.included list or recorded in ContextPacket.omitted_candidates.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "path",
+    "candidate_kind",
+    "reason_code",
+    "score",
+    "features",
+    "estimated_tokens",
+    "discovered_by"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "path": { "type": "string" },
+    "ranges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["start", "end"],
+        "properties": {
+          "start": { "type": "integer", "minimum": 1 },
+          "end": { "type": "integer", "minimum": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "candidate_kind": { "type": "string", "enum": ["full_file", "symbol_slice", "line_range"] },
+    "reason_code": {
+      "type": "string",
+      "enum": [
+        "direct_user_mention",
+        "failing_test_reference",
+        "symbol_definition",
+        "caller",
+        "callee",
+        "config_dependency",
+        "route_or_schema_link",
+        "git_cochange",
+        "prior_memory_match",
+        "embedding_match",
+        "stack_trace_reference",
+        "manifest_reference"
+      ]
+    },
+    "score": { "type": "number" },
+    "features": {
+      "type": "object",
+      "description": "Normalized feature values [0.0, 1.0] that contributed to the score.",
+      "additionalProperties": { "type": "number" }
+    },
+    "estimated_tokens": { "type": "integer", "minimum": 0 },
+    "discovered_by": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["rg", "ast", "lsp", "git_cochange", "embedding", "manifest", "memory"]
+      },
+      "minItems": 1
+    },
+    "source_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ContextCandidateBase": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "path",
+        "candidate_kind",
+        "reason_code",
+        "score",
+        "features",
+        "estimated_tokens",
+        "discovered_by"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "path": { "type": "string" },
+        "ranges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["start", "end"],
+            "properties": {
+              "start": { "type": "integer", "minimum": 1 },
+              "end": { "type": "integer", "minimum": 1 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "candidate_kind": { "type": "string", "enum": ["full_file", "symbol_slice", "line_range"] },
+        "reason_code": {
+          "type": "string",
+          "enum": [
+            "direct_user_mention",
+            "failing_test_reference",
+            "symbol_definition",
+            "caller",
+            "callee",
+            "config_dependency",
+            "route_or_schema_link",
+            "git_cochange",
+            "prior_memory_match",
+            "embedding_match",
+            "stack_trace_reference",
+            "manifest_reference"
+          ]
+        },
+        "score": { "type": "number" },
+        "features": {
+          "type": "object",
+          "description": "Normalized feature values [0.0, 1.0] that contributed to the score.",
+          "additionalProperties": { "type": "number" }
+        },
+        "estimated_tokens": { "type": "integer", "minimum": 0 },
+        "discovered_by": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["rg", "ast", "lsp", "git_cochange", "embedding", "manifest", "memory"]
+          },
+          "minItems": 1
+        },
+        "source_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    }
+  }
+}

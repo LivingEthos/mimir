@@ -1,0 +1,10 @@
+# Fixture 13: mode2-telemetry
+mode: 2
+description: Telemetry event recording
+task: Check telemetry event structure
+target_files:
+  - crates/mimir-telemetry/src/lib.rs
+expected_included:
+  - crates/mimir-telemetry/src/lib.rs
+expected_omitted:
+---

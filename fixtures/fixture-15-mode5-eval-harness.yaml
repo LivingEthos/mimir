@@ -1,0 +1,10 @@
+# Fixture 15: mode5-eval-harness
+mode: 5
+description: Eval harness with fixtures
+task: Run eval with fixture dataset
+target_files:
+  - crates/mimir-eval/src/lib.rs
+expected_included:
+  - crates/mimir-eval/src/lib.rs
+expected_omitted:
+---

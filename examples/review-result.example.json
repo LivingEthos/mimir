@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "review_id": "rev-1",
+  "packet_id": "01941a99-7c1a-7e2b-8d3c-2f3e9c0d4e5f",
+  "editor_run_id": "20260518-141522-a3f9b2c1",
+  "verdict": "accept",
+  "findings": [
+    {
+      "finding_id": "f-1",
+      "severity": "low",
+      "category": "test_coverage",
+      "summary": "No regression test was added for the expiry-before-cache ordering; the existing test would still pass if the bug were reintroduced in a different code path.",
+      "evidence": [
+        {
+          "path": "tests/auth/session.test.ts",
+          "ranges": [{ "start": 80, "end": 130 }]
+        }
+      ],
+      "specialists": ["test_impact_coverage"],
+      "blocking": false
+    }
+  ],
+  "risks": [
+    "Callers in src/api/routes/login.ts now see slightly different refresh latency; verify with the integration suite."
+  ],
+  "coverage_concerns": [],
+  "committee_mode": false,
+  "ran_at": "2026-05-18T14:32:08Z"
+}

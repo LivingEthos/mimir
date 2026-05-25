@@ -1,0 +1,11 @@
+# Fixture 5: mode5-memory
+mode: 5
+description: Memory-augmented context
+task: Build context with verified memory entries
+target_files:
+  - crates/mimir-memory/src/lib.rs
+expected_included:
+  - crates/mimir-memory/src/lib.rs
+  - .mimir/memory.db
+expected_omitted:
+---

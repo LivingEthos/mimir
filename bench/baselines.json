@@ -1,0 +1,20 @@
+{
+  "version": "1.0.0",
+  "commit": "v1.0.0",
+  "metrics": {
+    "mimir_init_ms": 50,
+    "cold_startup_warm_cache_ms": 150,
+    "cold_startup_no_cache_ms": 1200,
+    "packet_build_small_ms": 300,
+    "repo_index_10k_cold_s": 25,
+    "repo_index_incremental_s": 1.5,
+    "token_count_local_ms": 20,
+    "tui_render_frame_ms": 8,
+    "doctor_command_s": 1.0
+  },
+  "ci_gates": {
+    "test_timeout_multiplier": 10,
+    "eval_timeout_multiplier": 5,
+    "bench_regression_threshold_percent": 20
+  }
+}

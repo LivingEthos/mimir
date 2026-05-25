@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimir.dev/schemas/OverrideRequest.schema.json",
+  "title": "OverrideRequest",
+  "description": "Logged justification for an above-default cap. Required for any call exceeding ContextPolicy.hard_input_cap_tokens.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "request_id",
+    "requested_cap",
+    "mode",
+    "reason",
+    "requested_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "request_id": { "type": "string" },
+    "requested_cap": { "type": "integer", "enum": [128000, 256000, 1000000] },
+    "mode": { "type": "string", "enum": ["burst", "read_only", "reviewer", "migration"] },
+    "reason": { "type": "string" },
+    "evidence_already_inspected": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "ranges": { "type": "array" }
+        }
+      }
+    },
+    "missing_context": { "type": "array", "items": { "type": "string" } },
+    "expected_benefit": { "type": "string" },
+    "alternatives_attempted": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["subagent_summary", "symbol_slicing", "additional_retrieval", "test_narrowing", "none"]
+      }
+    },
+    "requested_at": { "type": "string", "format": "date-time" },
+    "granted": { "type": ["boolean", "null"] },
+    "granted_by": { "type": ["string", "null"], "enum": [null, "user", "auto_after_failures", "policy"] },
+    "granted_at": { "type": ["string", "null"], "format": "date-time" },
+    "denied_reason": { "type": ["string", "null"] }
+  },
+  "additionalProperties": false
+}

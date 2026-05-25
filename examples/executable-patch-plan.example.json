@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "plan_id": "plan-1",
+  "packet_id": "01941a8e-2d3f-7c45-9c1f-1e23b8a8c1e7",
+  "steps": [
+    {
+      "action": "unified_diff",
+      "path": "src/auth/session.ts",
+      "diff": "--- a/src/auth/session.ts\n+++ b/src/auth/session.ts\n@@ -1 +1 @@\n-export const maxAge = 60;\n+export const maxAge = 300;\n"
+    }
+  ]
+}

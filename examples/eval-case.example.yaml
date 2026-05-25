@@ -1,0 +1,25 @@
+schema_version: 1
+id: ts-auth-session-stale-token
+repo_path: fixtures/repos/ts-auth-session-stale-token
+base_commit: 7b3f1a9c2d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a
+task: "Fix the session refresh bug where validateSession returns stale tokens."
+gold:
+  files:
+    - src/auth/session.ts
+    - tests/auth/session.test.ts
+  ranges:
+    - path: src/auth/session.ts
+      start: 40
+      end: 140
+    - path: tests/auth/session.test.ts
+      start: 1
+      end: 220
+  distractors:
+    - src/auth/legacy/old-session.ts
+    - src/api/routes/login.ts
+    - src/auth/jwt.ts
+expected_tests:
+  - "pnpm test auth/session.test.ts"
+allowed_mode: code
+allowed_caps_to_test: [16000, 32000, 64000, 96000, 128000]
+generated: false

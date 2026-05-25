@@ -1,0 +1,185 @@
+schema_version: 1
+id: context-recall-v1
+description: Local context recall fixture set covering Mimir 1.0 modes 0, 2, 3, 4, and 5.
+cases:
+  - schema_version: 1
+    id: fixture-01-mode0-simple-ask
+    repo_path: "."
+    base_commit: e51ee9ef
+    task: Explain what the ContextBuilder does
+    gold:
+      files: [crates/mimir-core/src/lib.rs]
+      ranges:
+        - { path: crates/mimir-core/src/lib.rs, start: 1, end: 3 }
+    allowed_mode: ask
+    allowed_caps_to_test: [64000]
+  - schema_version: 1
+    id: fixture-02-mode2-cross-crate-ref
+    repo_path: "."
+    base_commit: e51ee9ef
+    task: How does the CLI call context building?
+    gold:
+      files:
+        - crates/mimir-cli/src/main.rs
+        - crates/mimir-context/src/lib.rs
+        - crates/mimir-core/src/lib.rs
+      ranges:
+        - { path: crates/mimir-cli/src/main.rs, start: 1, end: 220 }
+        - { path: crates/mimir-context/src/lib.rs, start: 1, end: 40 }
+        - { path: crates/mimir-core/src/lib.rs, start: 1, end: 3 }
+      distractors: [crates/mimir-tui/src/lib.rs]
+    allowed_mode: plan
+    allowed_caps_to_test: [64000]
+  - schema_version: 1
+    id: fixture-03-mode3-trace-replay
+    repo_path: "."
+    base_commit: e51ee9ef
+    task: Replay a previous context build
+    gold:
+      files: [docs/context-packets.md]
+      ranges:
+        - { path: docs/context-packets.md, start: 1, end: 120 }
+    allowed_mode: explain
+    allowed_caps_to_test: [64000]
+  - schema_version: 1
+    id: fixture-04-mode4-subagent
+    repo_path: "."
+    base_commit: e51ee9ef
+    task: Run a security review subagent
+    gold:
+      files: [crates/mimir-subagents/src/lib.rs]
+      ranges:
+        - { path: crates/mimir-subagents/src/lib.rs, start: 1, end: 40 }
+    allowed_mode: review
+    allowed_caps_to_test: [64000]
+  - schema_version: 1
+    id: fixture-05-mode5-memory
+    repo_path: "."
+    base_commit: e51ee9ef
+    task: Build context with verified memory entries
+    gold:
+      files:
+        - crates/mimir-memory/src/lib.rs
+        - crates/mimir-memory/src/store.rs
+      ranges:
+        - { path: crates/mimir-memory/src/lib.rs, start: 1, end: 80 }
+        - { path: crates/mimir-memory/src/store.rs, start: 1, end: 120 }
+    allowed_mode: code
+    allowed_caps_to_test: [64000]
+  - schema_version: 1
+    id: fixture-06-mode0-cap-compliance
+    repo_path: "."
+    base_commit: e51ee9ef
+    task: Test cap compliance at gateway
+    gold:
+      files: [crates/mimir-providers/src/gateway.rs]
+      ranges:
+        - { path: crates/mimir-providers/src/gateway.rs, start: 1, end: 160 }
+    allowed_mode: ask
+    allowed_caps_to_test: [64000]
+  - schema_version: 1
+    id: fixture-07-mode2-recall-guard
+    repo_path: "."
+    base_commit: e51ee9ef
+    task: Ensure critical files are not omitted
+    gold:
+      files: [crates/mimir-retrieval/src/lib.rs]
+      ranges:
+        - { path: crates/mimir-retrieval/src/lib.rs, start: 1, end: 160 }
+    allowed_mode: plan
+    allowed_caps_to_test: [64000]
+  - schema_version: 1
+    id: fixture-08-mode0-redactor
+    repo_path: "."
+    base_commit: e51ee9ef
+    task: Verify security documentation explains redaction coverage
+    gold:
+      files: [docs/security.md]
+      ranges:
+        - { path: docs/security.md, start: 1, end: 120 }
+    allowed_mode: ask
+    allowed_caps_to_test: [64000]
+  - schema_version: 1
+    id: fixture-09-mode2-provider-adapter
+    repo_path: "."
+    base_commit: e51ee9ef
+    task: Check Anthropic adapter implementation
+    gold:
+      files:
+        - crates/mimir-providers/src/adapters/anthropic.rs
+        - crates/mimir-providers/src/capabilities.rs
+      ranges:
+        - { path: crates/mimir-providers/src/adapters/anthropic.rs, start: 1, end: 180 }
+        - { path: crates/mimir-providers/src/capabilities.rs, start: 1, end: 180 }
+      distractors: [crates/mimir-tui/src/lib.rs]
+    allowed_mode: plan
+    allowed_caps_to_test: [64000]
+  - schema_version: 1
+    id: fixture-10-mode4-edit-loop
+    repo_path: "."
+    base_commit: e51ee9ef
+    task: Verify repair loop converges
+    gold:
+      files:
+        - crates/mimir-edit/src/repair.rs
+        - crates/mimir-edit/src/test_runner.rs
+      ranges:
+        - { path: crates/mimir-edit/src/repair.rs, start: 1, end: 180 }
+        - { path: crates/mimir-edit/src/test_runner.rs, start: 1, end: 180 }
+    allowed_mode: code
+    allowed_caps_to_test: [64000]
+  - schema_version: 1
+    id: fixture-11-mode5-session-import
+    repo_path: "."
+    base_commit: e51ee9ef
+    task: Import and validate external session
+    gold:
+      files: [crates/mimir-memory/src/importers.rs]
+      ranges:
+        - { path: crates/mimir-memory/src/importers.rs, start: 1, end: 220 }
+    allowed_mode: code
+    allowed_caps_to_test: [64000]
+  - schema_version: 1
+    id: fixture-12-mode0-server-transport
+    repo_path: "."
+    base_commit: e51ee9ef
+    task: Verify tower-lsp integration
+    gold:
+      files: [crates/mimir-server/src/lsp.rs]
+      ranges:
+        - { path: crates/mimir-server/src/lsp.rs, start: 1, end: 180 }
+    allowed_mode: ask
+    allowed_caps_to_test: [64000]
+  - schema_version: 1
+    id: fixture-13-mode2-telemetry
+    repo_path: "."
+    base_commit: e51ee9ef
+    task: Check telemetry event structure
+    gold:
+      files: [crates/mimir-telemetry/src/lib.rs]
+      ranges:
+        - { path: crates/mimir-telemetry/src/lib.rs, start: 1, end: 120 }
+    allowed_mode: plan
+    allowed_caps_to_test: [64000]
+  - schema_version: 1
+    id: fixture-14-mode3-packet-share
+    repo_path: "."
+    base_commit: e51ee9ef
+    task: Share a packet with secrets redacted
+    gold:
+      files: [docs/context-packets.md]
+      ranges:
+        - { path: docs/context-packets.md, start: 1, end: 160 }
+    allowed_mode: explain
+    allowed_caps_to_test: [64000]
+  - schema_version: 1
+    id: fixture-15-mode5-eval-harness
+    repo_path: "."
+    base_commit: e51ee9ef
+    task: Run eval with fixture dataset
+    gold:
+      files: [crates/mimir-eval/src/lib.rs]
+      ranges:
+        - { path: crates/mimir-eval/src/lib.rs, start: 1, end: 220 }
+    allowed_mode: code
+    allowed_caps_to_test: [64000]

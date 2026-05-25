@@ -1,0 +1,30 @@
+# Rust build artifacts
+/target
+Cargo.lock
+
+# JavaScript dependencies
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Mimir runtime
+.mimir/
+.serena/
+
+# Test artifacts
+*.tmp
+*.bak
+
+# Coverage
+cobertura.xml
+lcov.info
+tarpaulin-report.html

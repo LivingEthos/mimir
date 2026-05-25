@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimir.dev/schemas/PatchPlan.schema.json",
+  "title": "PatchPlan",
+  "description": "The editor's plan before any file write. The editable_target_set is enforced: the editor cannot write to files outside this set.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "plan_id",
+    "packet_id",
+    "files_to_edit",
+    "editable_target_set",
+    "reasoning_per_edit",
+    "tests_to_run",
+    "risks"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "plan_id": { "type": "string" },
+    "packet_id": { "type": "string" },
+    "files_to_edit": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "edit_kind"],
+        "properties": {
+          "path": { "type": "string" },
+          "edit_kind": { "type": "string", "enum": ["ast_replace", "line_range_replace", "unified_diff", "whole_file_rewrite"] },
+          "ranges": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "start": { "type": "integer" },
+                "end": { "type": "integer" }
+              }
+            }
+          },
+          "expected_new_content_hash": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "editable_target_set": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Authorized files. Equals or is a subset of ContextPacket.included items with editable=true."
+    },
+    "reasoning_per_edit": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "rationale"],
+        "properties": {
+          "path": { "type": "string" },
+          "rationale": { "type": "string" },
+          "disproving_evidence": {
+            "type": "string",
+            "description": "What evidence would show this edit is wrong?"
+          }
+        }
+      }
+    },
+    "tests_to_run": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "risks": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "what_needs_more_context": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": false
+}

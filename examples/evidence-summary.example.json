@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "summary_id": "ev-1",
+  "subagent_kind": "search",
+  "parent_run_id": "20260518-141522-a3f9b2c1",
+  "subagent_run_id": "20260518-141600-b4e8c3d2",
+  "subagent_packet_id": "01941a9b-5d8e-7c2a-9b1f-3d4f8e1c2a3b",
+  "task": "Find every caller of validateSession in the TS/JS source tree, with file ranges.",
+  "files_inspected": [
+    "src/auth/session.ts",
+    "src/auth/index.ts",
+    "src/api/routes/login.ts",
+    "src/middleware/require-auth.ts"
+  ],
+  "important_symbols": ["validateSession", "refreshSession", "Session"],
+  "findings": [
+    {
+      "claim": "validateSession is exported from src/auth/session.ts and called from three callsites.",
+      "evidence": [
+        { "path": "src/auth/session.ts", "ranges": [{ "start": 42, "end": 80 }] },
+        { "path": "src/auth/index.ts", "ranges": [{ "start": 18, "end": 22 }] },
+        { "path": "src/api/routes/login.ts", "ranges": [{ "start": 55, "end": 58 }] },
+        { "path": "src/middleware/require-auth.ts", "ranges": [{ "start": 12, "end": 15 }] }
+      ]
+    }
+  ],
+  "recommended_parent_inclusions": [
+    {
+      "path": "src/middleware/require-auth.ts",
+      "ranges": [{ "start": 1, "end": 40 }],
+      "reason": "caller of validateSession not currently in the packet"
+    }
+  ],
+  "confidence": "high",
+  "unknowns": [],
+  "do_not_assume": [
+    "Whether validateSession is also called from JS files in the build output — search was limited to src/ TS files."
+  ],
+  "ran_at": "2026-05-18T14:31:02Z"
+}

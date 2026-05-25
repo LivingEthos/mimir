@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimir.dev/schemas/ContextPacket.schema.json",
+  "title": "ContextPacket",
+  "description": "The central artifact of a Mimir model call: a hashable, replayable manifest of every file range, evidence card, tool schema, and memory entry sent to a provider. Every provider call originates from one of these.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "packet_id",
+    "packet_hash",
+    "run_id",
+    "task_card",
+    "mode",
+    "cap_tokens",
+    "target_tokens",
+    "output_reserve_tokens",
+    "count_drift_reserve_tokens",
+    "provider",
+    "model",
+    "capability_snapshot_ref",
+    "prompt_contract_version",
+    "included",
+    "omitted_candidates",
+    "tool_schemas",
+    "evidence_cards",
+    "memory_entries",
+    "budget_ledger_ref",
+    "estimated_input_tokens",
+    "count_provenance",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "packet_id": {
+      "type": "string",
+      "description": "Stable unique ID for this packet. UUID v4."
+    },
+    "packet_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of the JCS-canonicalized packet (excluding packet_hash, estimated_input_tokens, authoritative_input_tokens)."
+    },
+    "parent_packet_id": {
+      "type": ["string", "null"],
+      "description": "If this packet is a repair-loop delta, the packet_id of its parent."
+    },
+    "delta_from_parent": {
+      "type": ["object", "null"],
+      "description": "If parent_packet_id is set, the diff: added/removed candidates and their reasons.",
+      "properties": {
+        "added": { "type": "array", "items": { "type": "string" } },
+        "removed": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[0-9]{8}-[0-9]{6}-[0-9a-f]{8}$"
+    },
+    "task_card": {
+      "type": "object",
+      "required": ["goal", "complexity"],
+      "properties": {
+        "goal": { "type": "string" },
+        "acceptance_criteria": { "type": "array", "items": { "type": "string" } },
+        "likely_files": { "type": "array", "items": { "type": "string" } },
+        "risk_level": { "type": "string", "enum": ["low", "medium", "high"] },
+        "expected_test_command": { "type": ["string", "null"] },
+        "unknowns": { "type": "array", "items": { "type": "string" } },
+        "need_for_large_context": { "type": "string", "enum": ["none", "possible", "likely"] },
+        "complexity": { "type": "string", "enum": ["tiny", "standard", "complex", "override"] }
+      }
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["ask", "plan", "code", "review", "explain", "subagent_search", "subagent_file_analyst", "subagent_reviewer", "subagent_test_summarizer", "committee_specialist"]
+    },
+    "cap_tokens": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Hard input cap for this packet, in tokens."
+    },
+    "target_tokens": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Packer's target. Less than cap_tokens."
+    },
+    "output_reserve_tokens": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "count_drift_reserve_tokens": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "provider": {
+      "type": "string",
+      "description": "Provider name, matching a key in providers.yaml."
+    },
+    "model": {
+      "type": "string"
+    },
+    "capability_snapshot_ref": {
+      "type": "string",
+      "description": "Reference (e.g., file path or content-hash) to the ProviderCapabilities snapshot in effect when this packet was built."
+    },
+    "prompt_contract_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Version of the system prompt contract used (see 20-PROMPT-CONTRACT.md)."
+    },
+    "included": {
+      "type": "array",
+      "description": "PackedSource items: the post-packing projection of selected candidates. See 05-SCHEMAS.md for the asymmetry vs ContextCandidate (no score/features/discovered_by; trace back via candidate_manifest_ref).",
+      "items": {
+        "type": "object",
+        "required": ["path", "ranges", "candidate_kind", "reason_code", "tokens", "source_hash", "trust_level", "editable"],
+        "properties": {
+          "path": { "type": "string" },
+          "ranges": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["start", "end"],
+              "properties": {
+                "start": { "type": "integer", "minimum": 1 },
+                "end": { "type": "integer", "minimum": 1 }
+              }
+            }
+          },
+          "candidate_kind": { "type": "string", "enum": ["full_file", "symbol_slice", "line_range"] },
+          "reason_code": {
+            "type": "string",
+            "enum": [
+              "direct_user_mention",
+              "failing_test_reference",
+              "symbol_definition",
+              "caller",
+              "callee",
+              "config_dependency",
+              "route_or_schema_link",
+              "git_cochange",
+              "prior_memory_match",
+              "embedding_match",
+              "stack_trace_reference",
+              "manifest_reference"
+            ]
+          },
+          "tokens": { "type": "integer", "minimum": 0 },
+          "source_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "trust_level": { "type": "string", "enum": ["trusted", "untrusted"] },
+          "editable": { "type": "boolean" }
+        }
+      }
+    },
+    "omitted_candidates": {
+      "type": "array",
+      "description": "Top-N omitted candidates, per OmittedCandidate.schema.json.",
+      "items": { "$ref": "https://mimir.dev/schemas/OmittedCandidate.schema.json" }
+    },
+    "tool_schemas": {
+      "type": "array",
+      "description": "Tool schemas included in the request, with per-tool token cost.",
+      "items": {
+        "type": "object",
+        "required": ["name", "tokens"],
+        "properties": {
+          "name": { "type": "string" },
+          "tokens": { "type": "integer", "minimum": 0 },
+          "deferred": { "type": "boolean", "default": false }
+        }
+      }
+    },
+    "evidence_cards": {
+      "type": "array",
+      "description": "ToolResultCard and TestCard refs (paths under .mimir/runs/<run_id>/).",
+      "items": {
+        "type": "object",
+        "required": ["kind", "path"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["tool_result", "test"] },
+          "path": { "type": "string" },
+          "tokens": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "memory_entries": {
+      "type": "array",
+      "description": "MemoryEntry refs included in this packet (P6+).",
+      "items": {
+        "type": "object",
+        "required": ["entry_id", "tokens"],
+        "properties": {
+          "entry_id": { "type": "string" },
+          "tokens": { "type": "integer", "minimum": 0 },
+          "confidence": { "type": "string", "enum": ["provisional", "validated", "revoked"] }
+        }
+      }
+    },
+    "budget_ledger_ref": {
+      "type": "string",
+      "description": "Path to the BudgetLedger artifact for this packet."
+    },
+    "candidate_manifest_ref": {
+      "type": ["string", "null"],
+      "description": "Path to the CandidateManifest used to build this packet. Null only if the packet was constructed without retrieval (e.g., a hand-built fixture)."
+    },
+    "override": {
+      "type": ["object", "null"],
+      "description": "If this packet was authorized by an override, the OverrideRequest snapshot.",
+      "properties": {
+        "requested_cap": { "type": "integer" },
+        "mode": { "type": "string", "enum": ["burst", "read_only", "reviewer", "migration"] },
+        "reason": { "type": "string" },
+        "granted_by": { "type": "string", "enum": ["user", "auto_after_failures", "policy"] },
+        "granted_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "estimated_input_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Local-tokenizer estimate of the total input tokens for the request built from this packet."
+    },
+    "authoritative_input_tokens": {
+      "type": ["integer", "null"],
+      "description": "Provider server count endpoint result used for policy enforcement, if available. This may still be an estimate per provider documentation."
+    },
+    "count_provenance": {
+      "type": "string",
+      "enum": ["server_authoritative", "local_estimate_only", "unavailable"]
+    },
+    "recall_guard_flags": {
+      "type": "array",
+      "description": "High-risk omissions flagged by the recall guard (Stage 7).",
+      "items": {
+        "type": "object",
+        "required": ["risk", "path", "reason"],
+        "properties": {
+          "risk": { "type": "string", "enum": ["caller_missing", "test_missing", "config_missing", "schema_missing", "import_orphan"] },
+          "path": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}

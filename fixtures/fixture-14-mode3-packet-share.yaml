@@ -1,0 +1,10 @@
+# Fixture 14: mode3-packet-share
+mode: 3
+description: Packet sanitization and sharing
+task: Share a packet with secrets redacted
+target_files:
+  - crates/mimir-cli/src/main.rs
+expected_included:
+  - crates/mimir-cli/src/main.rs
+expected_omitted:
+---

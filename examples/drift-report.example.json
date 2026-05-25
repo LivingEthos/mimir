@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-6",
+  "samples": [
+    { "local_tokens": 12450, "server_tokens": 12502, "drift_ratio": -0.00416, "payload_class": "standard" },
+    { "local_tokens": 38120, "server_tokens": 38891, "drift_ratio": -0.01982, "payload_class": "complex" },
+    { "local_tokens": 1450, "server_tokens": 1473, "drift_ratio": -0.01561, "payload_class": "tiny" }
+  ],
+  "drift_p50": 0.0102,
+  "drift_p95": 0.0184,
+  "drift_p99": 0.0241,
+  "recommended_reserve_tokens": 1206,
+  "ran_at": "2026-05-18T13:00:00Z"
+}

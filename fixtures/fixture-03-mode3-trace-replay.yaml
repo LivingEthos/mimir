@@ -1,0 +1,10 @@
+# Fixture 3: mode3-trace-replay
+mode: 3
+description: Replay a previous context build
+task: Replay the last context build
+target_files:
+  - .mimir/runs/*/context_packet.json
+expected_included:
+  - .mimir/runs/*/context_packet.json
+expected_omitted:
+---

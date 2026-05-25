@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimir.dev/schemas/ExecutablePatchPlan.schema.json",
+  "title": "ExecutablePatchPlan",
+  "description": "The executable patch recipe paired with PatchPlan metadata in code-mode runs. PatchPlan explains the edit; ExecutablePatchPlan is the payload Mimir may apply after safety validation.",
+  "type": "object",
+  "required": ["schema_version", "plan_id", "packet_id", "steps"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "plan_id": { "type": "string" },
+    "packet_id": { "type": "string" },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/patch_step" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "patch_step": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["action", "path", "start_line", "end_line", "content"],
+          "properties": {
+            "action": { "const": "line_range" },
+            "path": { "type": "string" },
+            "start_line": { "type": "integer", "minimum": 1 },
+            "end_line": { "type": "integer", "minimum": 1 },
+            "content": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["action", "path", "diff"],
+          "properties": {
+            "action": { "const": "unified_diff" },
+            "path": { "type": "string" },
+            "diff": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["action", "path", "content"],
+          "properties": {
+            "action": { "const": "whole_file" },
+            "path": { "type": "string" },
+            "content": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["action", "path", "content"],
+          "properties": {
+            "action": { "const": "create" },
+            "path": { "type": "string" },
+            "content": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["action", "path"],
+          "properties": {
+            "action": { "const": "delete" },
+            "path": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["action", "from", "to"],
+          "properties": {
+            "action": { "const": "move" },
+            "from": { "type": "string" },
+            "to": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

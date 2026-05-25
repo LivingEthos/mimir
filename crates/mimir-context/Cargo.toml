@@ -1,0 +1,31 @@
+[package]
+name = "mimir-context"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+mimir-schemas = { path = "../mimir-schemas" }
+mimir-telemetry = { path = "../mimir-telemetry" }
+mimir-security = { path = "../mimir-security" }
+mimir-runs = { path = "../mimir-runs" }
+mimir-tools = { path = "../mimir-tools" }
+mimir-index = { path = "../mimir-index" }
+mimir-retrieval = { path = "../mimir-retrieval" }
+mimir-providers = { path = "../mimir-providers" }
+mimir-memory = { path = "../mimir-memory" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

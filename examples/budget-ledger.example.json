@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "packet_id": "01941a8e-2d3f-7c45-9c1f-1e23b8a8c1e7",
+  "categories": {
+    "system": 3800,
+    "task": 1200,
+    "acceptance": 900,
+    "rules": 2200,
+    "memory": 0,
+    "repo_map": 8200,
+    "code_ranges": 14400,
+    "editable_files": 0,
+    "tests_logs": 320,
+    "current_diff": 0,
+    "tool_schemas": 420,
+    "tool_outputs": 0,
+    "subagent_summaries": 0
+  },
+  "total": 31440,
+  "cap_tokens": 65536,
+  "target_tokens": 56000,
+  "output_reserve_tokens": 8192,
+  "count_drift_reserve_tokens": 1024,
+  "window_total_tokens": 40656,
+  "slack": 24560,
+  "cache_hits_tokens": 8200,
+  "cache_misses_tokens": 23240
+}

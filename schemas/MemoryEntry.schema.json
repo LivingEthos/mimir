@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimir.dev/schemas/MemoryEntry.schema.json",
+  "title": "MemoryEntry",
+  "description": "A durable lesson with source, confidence, scope, and freshness metadata. Earned through verification (see 14-LEARNING-LAYER.md). Memory is retrieved into packets only in Phase 6+.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "entry_id",
+    "kind",
+    "body",
+    "source_evidence",
+    "confidence",
+    "scope",
+    "safe_to_send",
+    "created_at",
+    "retrieval_tags"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "entry_id": { "type": "string" },
+    "kind": { "type": "string", "enum": ["project", "experience", "error", "symbol"] },
+    "body": { "type": "string" },
+    "source_evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "ref"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["run", "commit", "file_hash", "test_card", "user_correction"] },
+          "ref": { "type": "string" }
+        }
+      },
+      "minItems": 1
+    },
+    "confidence": { "type": "string", "enum": ["provisional", "validated", "revoked"] },
+    "promotion_score": {
+      "type": ["number", "null"],
+      "description": "Composite score from MemoryDecisionEngine. Null until P6."
+    },
+    "promotion_breakdown": {
+      "type": ["object", "null"],
+      "description": "Score components (severity, recurrence, success_rate, task_relevance, token_savings).",
+      "properties": {
+        "severity_score": { "type": "number" },
+        "recurrence_score": { "type": "number" },
+        "success_rate_score": { "type": "number" },
+        "task_relevance_score": { "type": "number" },
+        "token_savings_score": { "type": "number" },
+        "total": { "type": "number" }
+      }
+    },
+    "scope": { "type": "string", "enum": ["private", "repo_shared", "global"] },
+    "safe_to_send": { "type": "boolean", "description": "If false, the entry stays local and is never included in a packet sent to a provider." },
+    "created_at": { "type": "string", "format": "date-time" },
+    "last_verified_at": { "type": ["string", "null"], "format": "date-time" },
+    "staleness_policy": {
+      "type": "object",
+      "properties": {
+        "max_age_days": { "type": ["integer", "null"], "minimum": 1 },
+        "auto_revoke_after_failures": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "retrieval_tags": { "type": "array", "items": { "type": "string" } },
+    "imported_from": {
+      "type": ["object", "null"],
+      "description": "If this entry was imported from another tool's sessions, the source.",
+      "properties": {
+        "tool": { "type": "string", "enum": ["claude-code", "codex", "aider", "opencode", "mimir"] },
+        "session_id": { "type": "string" }
+      }
+    }
+  },
+  "additionalProperties": false
+}

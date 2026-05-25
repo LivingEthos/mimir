@@ -1,0 +1,10 @@
+# Fixture 6: mode0-cap-compliance
+mode: 0
+description: Token cap enforcement
+task: Test cap compliance at gateway
+target_files:
+  - crates/mimir-providers/src/gateway.rs
+expected_included:
+  - crates/mimir-providers/src/gateway.rs
+expected_omitted:
+---

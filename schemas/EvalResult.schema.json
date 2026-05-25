@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimir.dev/schemas/EvalResult.schema.json",
+  "title": "EvalResult",
+  "description": "Result of running an EvalCase in a specific mode and cap.",
+  "type": "object",
+  "required": ["schema_version", "case_id", "mode", "cap_tokens", "metrics", "ran_at"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "case_id": { "type": "string" },
+    "mode": { "type": "string", "enum": ["0-baseline", "1-cap-only", "2-rank", "3-rank-recall", "4-rank-recall-subagents", "5-full"] },
+    "cap_tokens": { "type": "integer", "minimum": 1 },
+    "model": { "type": "string" },
+    "provider": { "type": "string" },
+    "metrics": {
+      "type": "object",
+      "required": [
+        "file_recall",
+        "range_recall",
+        "precision",
+        "critical_omission_count",
+        "cap_compliance",
+        "e2e_latency_ms",
+        "tokens_in_total",
+        "tokens_out_total",
+        "cost_usd_total"
+      ],
+      "properties": {
+        "file_recall": { "type": "number", "minimum": 0, "maximum": 1 },
+        "range_recall": { "type": "number", "minimum": 0, "maximum": 1 },
+        "precision": { "type": "number", "minimum": 0, "maximum": 1 },
+        "tokens_per_useful_line": { "type": "number", "minimum": 0 },
+        "critical_omission_count": { "type": "integer", "minimum": 0 },
+        "cap_compliance": { "type": "boolean" },
+        "token_count_agreement_p95": { "type": "number", "minimum": 0 },
+        "packet_build_latency_ms": { "type": "integer", "minimum": 0 },
+        "retrieval_latency_ms": { "type": "integer", "minimum": 0 },
+        "repo_map_refresh_latency_ms": { "type": "integer", "minimum": 0 },
+        "e2e_latency_ms": { "type": "integer", "minimum": 0 },
+        "tokens_in_total": { "type": "integer", "minimum": 0 },
+        "tokens_out_total": { "type": "integer", "minimum": 0 },
+        "cost_usd_total": { "type": "number", "minimum": 0 },
+        "repair_turns": { "type": "integer", "minimum": 0 },
+        "override_used": { "type": "boolean" },
+        "outcome": { "type": ["string", "null"], "enum": [null, "tests_pass", "tests_fail", "aborted_cost", "aborted_repair", "aborted_policy"] },
+        "total_cost_to_success": { "type": ["number", "null"], "minimum": 0 },
+        "index_cache_hit_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "prompt_cache_hit_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "packet_id": { "type": "string" },
+    "run_id": { "type": "string" },
+    "ran_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}

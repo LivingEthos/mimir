@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimir.dev/schemas/Error.schema.json",
+  "title": "Error",
+  "description": "Structured error returned by every public API. Always present in non-zero-exit responses in JSON output modes.",
+  "type": "object",
+  "required": ["schema_version", "code", "category", "message", "retryable"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "code": {
+      "type": "string",
+      "description": "Stable machine-readable identifier. Examples: gateway_over_cap, gateway_uncountable, retrieval_no_candidates, tool_timeout, policy_denied, provider_rate_limited, schema_invalid, io_not_found."
+    },
+    "category": {
+      "type": "string",
+      "enum": ["gateway", "retrieval", "index", "tool", "policy", "provider", "io", "schema"]
+    },
+    "message": { "type": "string", "description": "Human-readable description." },
+    "cause": {
+      "type": ["object", "null"],
+      "description": "Nested cause (recursive Error)."
+    },
+    "retryable": { "type": "boolean" },
+    "user_visible_hint": { "type": ["string", "null"], "description": "Suggested next action for the user." },
+    "context": {
+      "type": "object",
+      "description": "Arbitrary structured context (file paths, token counts, IDs). Not redacted; do not put secrets here.",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,14 @@
+# Fixture 2: mode2-cross-crate-ref
+mode: 2
+description: Cross-crate reference requiring repo map
+task: How does the CLI call context building?
+target_files:
+  - crates/mimir-cli/src/main.rs
+  - crates/mimir-context/src/lib.rs
+expected_included:
+  - crates/mimir-cli/src/main.rs
+  - crates/mimir-context/src/lib.rs
+  - crates/mimir-core/src/lib.rs
+expected_omitted:
+  - crates/mimir-tui/src/lib.rs
+---

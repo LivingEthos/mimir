@@ -1,0 +1,11 @@
+# Fixture 10: mode4-edit-loop
+mode: 4
+description: Edit/test/repair loop
+task: Verify repair loop converges
+target_files:
+  - crates/mimir-edit/src/repair.rs
+expected_included:
+  - crates/mimir-edit/src/repair.rs
+  - crates/mimir-edit/src/test_runner.rs
+expected_omitted:
+---

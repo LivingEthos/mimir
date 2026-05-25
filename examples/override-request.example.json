@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "request_id": "ovr-1",
+  "requested_cap": 128000,
+  "mode": "read_only",
+  "reason": "Need to compare the migration scripts for v1 → v2 and v2 → v3 side-by-side to plan the v3 → v4 step. Six files, ~75k tokens combined.",
+  "evidence_already_inspected": [
+    { "path": "migrations/0042_add_users.sql", "ranges": [{ "start": 1, "end": 200 }] },
+    { "path": "migrations/0058_rename_users.sql", "ranges": [{ "start": 1, "end": 180 }] }
+  ],
+  "missing_context": [
+    "migrations/0061_add_users_index.sql full file",
+    "migrations/0073_split_users.sql full file",
+    "src/models/user.ts full file"
+  ],
+  "expected_benefit": "Side-by-side comparison surfaces the column-rename pattern used in v2→v3, which must be replicated in v3→v4.",
+  "alternatives_attempted": ["subagent_summary", "symbol_slicing"],
+  "requested_at": "2026-05-18T14:30:00Z",
+  "granted": true,
+  "granted_by": "user",
+  "granted_at": "2026-05-18T14:30:14Z",
+  "denied_reason": null
+}

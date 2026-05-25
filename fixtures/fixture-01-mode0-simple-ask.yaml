@@ -1,0 +1,10 @@
+# Fixture 1: mode0-simple-ask
+mode: 0
+description: Simple question about a single file
+task: Explain what the ContextBuilder does
+target_files:
+  - crates/mimir-core/src/lib.rs
+expected_included:
+  - crates/mimir-core/src/lib.rs
+expected_omitted:
+---

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mimir.dev/schemas/CandidateManifest.schema.json",
+  "title": "CandidateManifest",
+  "description": "Output of the retrieval pipeline (Stage 4). Input to the packer (Stage 5). Lists all candidates discovered, ranked, and dedup'd, before budget packing decides which become `included` and which become `omitted` in the ContextPacket.",
+  "type": "object",
+  "required": ["schema_version", "manifest_id", "run_id", "task_card_ref", "candidates", "stages_run", "elapsed_ms", "created_at"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "manifest_id": { "type": "string" },
+    "run_id": { "type": "string" },
+    "task_card_ref": { "type": "string", "description": "Path to or hash of the task card this manifest was built for." },
+    "candidates": {
+      "type": "array",
+      "description": "Ranked candidates. Each conforms to ContextCandidate.schema.json.",
+      "items": { "$ref": "https://mimir.dev/schemas/ContextCandidate.schema.json" }
+    },
+    "stages_run": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["high_recall_scan", "structural_expansion", "semantic_retrieval"] },
+      "minItems": 1
+    },
+    "stage_latency_ms": {
+      "type": "object",
+      "properties": {
+        "high_recall_scan": { "type": "integer", "minimum": 0 },
+        "structural_expansion": { "type": "integer", "minimum": 0 },
+        "semantic_retrieval": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "elapsed_ms": { "type": "integer", "minimum": 0 },
+    "candidate_count_pre_dedup": { "type": "integer", "minimum": 0 },
+    "candidate_count_post_dedup": { "type": "integer", "minimum": 0 },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}
