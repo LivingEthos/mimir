@@ -7,20 +7,20 @@ class Mimir < Formula
   on_macos do
     if Hardware::CPU.arm?
       url "https://github.com/MisterWonderful/mimir/releases/download/v1.0.0/mimir-cli-aarch64-apple-darwin.tar.xz"
-      sha256 "5e82466333ce0c5d4003fa33ee8e67884f5b15d80242ca3c258125c33040c462"
+      sha256 "773ad7851001cf1725bf50db5fd15697c2754a82c09c7f168412035b3ef188c4"
     else
       url "https://github.com/MisterWonderful/mimir/releases/download/v1.0.0/mimir-cli-x86_64-apple-darwin.tar.xz"
-      sha256 "96d132ec085d42198476ad9ded15f24b19c8193ee51e55bd45035911964ea56d"
+      sha256 "2cf9f5e5eb23af7b57b7b08c73b81aeddaccfcb4d6ea1ad9fd1a0dd7ca5bb3e7"
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
       url "https://github.com/MisterWonderful/mimir/releases/download/v1.0.0/mimir-cli-aarch64-unknown-linux-gnu.tar.xz"
-      sha256 "c4a3447a8a11d212b048b6bf8d0672423019f872bdc917e0c2c70940aa541471"
+      sha256 "bf2300a5e89cab374b856710326a51853459de820cd8a7eb8906b74b768ad6da"
     else
       url "https://github.com/MisterWonderful/mimir/releases/download/v1.0.0/mimir-cli-x86_64-unknown-linux-gnu.tar.xz"
-      sha256 "4be25c93b976038f34acd3d70532cacd28f03db42d971b2ffdd4d785fb5e2d32"
+      sha256 "4d022aafe48a965fc3b945b46b0138e5e0867fab9e128977502be0b102de0c18"
     end
   end
 
