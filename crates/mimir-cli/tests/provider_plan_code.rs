@@ -51,6 +51,80 @@ fn start_mock_provider(plan: serde_json::Value) -> MockProvider {
     MockProvider { url, requests: rx }
 }
 
+fn start_mock_provider_error(status: u16, body: &str) -> MockProvider {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let body = body.to_string();
+
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_http_request(&mut stream);
+        tx.send(request).unwrap();
+        write!(
+            stream,
+            "HTTP/1.1 {status} Error\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
+    });
+
+    MockProvider { url, requests: rx }
+}
+
+fn start_mock_provider_then_error(
+    first_plan: serde_json::Value,
+    status: u16,
+    body: &str,
+) -> MockProvider {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let first_body = json!({
+        "model": "glm-5.1",
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": first_plan.to_string()
+            },
+            "finish_reason": "stop"
+        }],
+        "usage": {
+            "prompt_tokens": 1000,
+            "completion_tokens": 500
+        }
+    })
+    .to_string();
+    let error_body = body.to_string();
+
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_http_request(&mut stream);
+        tx.send(request).unwrap();
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            first_body.len(),
+            first_body
+        )
+        .unwrap();
+
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_http_request(&mut stream);
+        tx.send(request).unwrap();
+        write!(
+            stream,
+            "HTTP/1.1 {status} Error\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            error_body.len(),
+            error_body
+        )
+        .unwrap();
+    });
+
+    MockProvider { url, requests: rx }
+}
+
 fn start_mock_provider_sequence(plans: Vec<serde_json::Value>) -> MockProvider {
     start_mock_provider_content_sequence(
         plans
@@ -371,6 +445,66 @@ fn run_id_from_stdout(stdout: &str) -> String {
         .to_string()
 }
 
+fn latest_run_dir(dir: &TempDir) -> std::path::PathBuf {
+    let mut dirs: Vec<_> = std::fs::read_dir(dir.path().join(".mimir/runs"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    dirs.sort();
+    dirs.pop().unwrap()
+}
+
+fn trace_spans(text: &str) -> Vec<serde_json::Value> {
+    text.lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect()
+}
+
+fn assert_sanitized_error_trace(run_dir: &std::path::Path, command_name: &str, forbidden: &[&str]) {
+    let trace_text = std::fs::read_to_string(run_dir.join("trace.spans.jsonl")).unwrap();
+    let spans = trace_spans(&trace_text);
+    let command_span = spans
+        .iter()
+        .find(|span| span["name"] == command_name)
+        .unwrap_or_else(|| panic!("missing {command_name} span in {trace_text}"));
+    assert_eq!(command_span["attrs"]["status"], "error");
+    assert_eq!(command_span["status"]["code"], "error");
+    assert!(command_span["attrs"].get("run_id").is_some());
+    assert!(command_span["attrs"].get("packet_id").is_some());
+    assert!(command_span["attrs"].get("provider").is_some());
+    assert!(command_span["attrs"].get("model").is_some());
+    assert!(command_span["attrs"].get("error").is_none());
+    assert!(command_span["attrs"].get("message").is_none());
+    assert!(command_span["attrs"].get("path").is_none());
+
+    for value in [
+        "context_packet.json",
+        "provider_request.redacted.json",
+        "response.json",
+        "patch_report.json",
+        "repair_request.redacted.turn-1.json",
+        "repair_response.turn-1.json",
+        ".mimir/runs",
+        "test-key",
+        "OPENAI_API_KEY",
+        "sk-12345678901234567890",
+        "Generate a production implementation plan",
+        "Propose a safe patch",
+        "Repair the previously applied Mimir patch",
+        "Return only JSON",
+        "Current packet_id",
+        "Failing test result JSON",
+    ]
+    .into_iter()
+    .chain(forbidden.iter().copied())
+    {
+        assert!(
+            !trace_text.contains(value),
+            "trace leaked forbidden value {value:?}:\n{trace_text}"
+        );
+    }
+}
+
 #[test]
 fn plan_uses_mock_provider_and_writes_replayable_artifacts() {
     let dir = TempDir::new().unwrap();
@@ -410,7 +544,7 @@ fn plan_uses_mock_provider_and_writes_replayable_artifacts() {
     assert!(request.contains("Generate a production implementation plan"));
     assert!(request.contains("hello.txt"));
 
-    let run_dir = dir.path().join(".mimir/runs").join(run_id);
+    let run_dir = dir.path().join(".mimir/runs").join(&run_id);
     let packet: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(run_dir.join("context_packet.json")).unwrap(),
     )
@@ -426,20 +560,99 @@ fn plan_uses_mock_provider_and_writes_replayable_artifacts() {
     assert_eq!(plan["files_likely_affected"][0], "hello.txt");
     assert!(run_dir.join("plan.md").exists());
     assert!(run_dir.join("provider_request.redacted.json").exists());
+    assert!(run_dir.join("trace.spans.jsonl").exists());
     assert_eq!(
         std::fs::read_to_string(dir.path().join("hello.txt")).unwrap(),
         "old greeting\n"
     );
 
+    let trace_spans = std::fs::read_to_string(run_dir.join("trace.spans.jsonl")).unwrap();
+    let spans = trace_spans
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    let context_span = spans
+        .iter()
+        .find(|span| span["name"] == "mimir.context.build")
+        .unwrap_or_else(|| panic!("missing context build span in {trace_spans}"));
+    assert_eq!(context_span["attrs"]["run_id"], run_id);
+    assert_eq!(context_span["attrs"]["packet_id"], packet["packet_id"]);
+    assert_eq!(context_span["attrs"]["provider"], "glm");
+    assert_eq!(context_span["attrs"]["model"], "glm-5.1");
+    assert_eq!(context_span["attrs"]["status"], "ok");
+    assert!(context_span["attrs"].get("mode").is_none());
+    assert!(context_span["attrs"].get("included_count").is_none());
+    assert!(context_span["attrs"].get("packet_path").is_none());
+
+    let provider_span = spans
+        .iter()
+        .find(|span| span["name"] == "mimir.provider.dispatch")
+        .unwrap();
+    assert_eq!(provider_span["kind"], "client");
+    assert_eq!(provider_span["attrs"]["run_id"], run_id);
+    assert_eq!(provider_span["attrs"]["packet_id"], packet["packet_id"]);
+    assert_eq!(provider_span["attrs"]["status"], "ok");
+    assert_eq!(provider_span["attrs"]["input_tokens"], 17);
+    assert_eq!(provider_span["attrs"]["output_tokens"], 5);
+    assert!(provider_span["attrs"].get("mode").is_none());
+    assert!(provider_span["attrs"].get("response_model").is_none());
+    assert!(provider_span["attrs"].get("stop_reason").is_none());
+    assert!(
+        provider_span["attrs"]["estimated_cost_usd"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
+    let command_span = spans
+        .iter()
+        .find(|span| span["name"] == "mimir.plan")
+        .unwrap();
+    assert_eq!(command_span["attrs"]["run_id"], run_id);
+    assert_eq!(command_span["attrs"]["packet_id"], packet["packet_id"]);
+    assert_eq!(command_span["attrs"]["status"], "ok");
+
     let artifacts = format!(
-        "{}{}{}{}{}",
+        "{}{}{}{}{}{}",
         std::fs::read_to_string(run_dir.join("context_packet.json")).unwrap(),
         std::fs::read_to_string(run_dir.join("provider_request.redacted.json")).unwrap(),
         std::fs::read_to_string(run_dir.join("response.json")).unwrap(),
         std::fs::read_to_string(run_dir.join("plan.json")).unwrap(),
-        std::fs::read_to_string(run_dir.join("events.jsonl")).unwrap()
+        std::fs::read_to_string(run_dir.join("events.jsonl")).unwrap(),
+        trace_spans
     );
     assert!(!artifacts.contains("test-key"));
+    assert!(!trace_spans.contains("Update the greeting in hello.txt"));
+}
+
+#[test]
+fn plan_provider_error_records_sanitized_command_span() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("app.txt"), "hello\n").unwrap();
+    let task = "Trace failure task should stay out of spans";
+    let body = "synthetic upstream failure body OPENAI_API_KEY=sk-12345678901234567890";
+    let provider = start_mock_provider_error(400, body);
+
+    mimir_cmd(&dir, &provider.url)
+        .args(["plan", "--editable", "app.txt", task])
+        .assert()
+        .failure();
+    let request = provider
+        .requests
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    assert!(request.contains("Generate a production implementation plan"));
+
+    let run_dir = latest_run_dir(&dir);
+    let trace_text = std::fs::read_to_string(run_dir.join("trace.spans.jsonl")).unwrap();
+    let spans = trace_spans(&trace_text);
+    assert!(spans.iter().any(|span| {
+        span["name"] == "mimir.provider.dispatch" && span["attrs"]["status"] == "error"
+    }));
+    assert_sanitized_error_trace(
+        &run_dir,
+        "mimir.plan",
+        &[task, "app.txt", body, "synthetic upstream failure body"],
+    );
 }
 
 #[test]
@@ -627,6 +840,37 @@ fn code_applies_provider_patch_with_safe_editable_set() {
     assert!(events.contains("provider_response"));
     assert!(events.contains("patch_applied"));
     assert!(!events.contains("test-key"));
+}
+
+#[test]
+fn code_provider_error_records_sanitized_command_span() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("hello.txt"), "old greeting\n").unwrap();
+    let task = "Trace code provider failure should stay out";
+    let body = "synthetic code provider body OPENAI_API_KEY=sk-12345678901234567890";
+    let provider = start_mock_provider_error(400, body);
+
+    mimir_cmd(&dir, &provider.url)
+        .args(["code", "--editable", "hello.txt", "--no-test", task])
+        .assert()
+        .failure();
+    let request = provider
+        .requests
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    assert!(request.contains("Propose a safe patch"));
+
+    let run_dir = latest_run_dir(&dir);
+    let trace_text = std::fs::read_to_string(run_dir.join("trace.spans.jsonl")).unwrap();
+    let spans = trace_spans(&trace_text);
+    assert!(spans.iter().any(|span| {
+        span["name"] == "mimir.provider.dispatch" && span["attrs"]["status"] == "error"
+    }));
+    assert_sanitized_error_trace(
+        &run_dir,
+        "mimir.code",
+        &[task, "hello.txt", body, "synthetic code provider body"],
+    );
 }
 
 #[test]
@@ -1135,6 +1379,7 @@ fn code_stops_before_initial_provider_call_when_cost_cap_is_hit() {
     let dir = TempDir::new().unwrap();
     std::fs::write(dir.path().join("hello.txt"), "old greeting\n").unwrap();
     let provider = start_mock_provider(answer_patch_plan("plan-never-called", 1, 2));
+    let task = "Do not call provider when preflight cost exceeds cap";
 
     let output = mimir_cmd(&dir, &provider.url)
         .args([
@@ -1144,7 +1389,7 @@ fn code_stops_before_initial_provider_call_when_cost_cap_is_hit() {
             "--cost-cap",
             "0",
             "--json",
-            "Do not call provider when preflight cost exceeds cap",
+            task,
         ])
         .output()
         .unwrap();
@@ -1165,6 +1410,28 @@ fn code_stops_before_initial_provider_call_when_cost_cap_is_hit() {
         std::fs::read_to_string(dir.path().join("hello.txt")).unwrap(),
         "old greeting\n"
     );
+    let run_id = report["run_id"].as_str().unwrap();
+    let run_dir = dir.path().join(".mimir/runs").join(run_id);
+    assert_sanitized_error_trace(&run_dir, "mimir.code", &[task, "hello.txt"]);
+}
+
+#[test]
+fn code_initial_parse_failure_records_sanitized_command_span() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("hello.txt"), "old greeting\n").unwrap();
+    let task = "Reject malformed initial provider body privately";
+    let body = "{not-json OPENAI_API_KEY=sk-12345678901234567890";
+    let provider = start_mock_provider_content_sequence(vec![body.to_string()]);
+
+    mimir_cmd(&dir, &provider.url)
+        .args(["code", "--editable", "hello.txt", "--no-test", task])
+        .assert()
+        .failure()
+        .stderr(contains("patch rejected by provider response validation"));
+
+    let run_dir = latest_run_dir(&dir);
+    assert!(run_dir.join("patch_report.json").exists());
+    assert_sanitized_error_trace(&run_dir, "mimir.code", &[task, "hello.txt", body]);
 }
 
 #[test]
@@ -1247,6 +1514,62 @@ fn code_fails_closed_on_malformed_repair_json_with_artifacts() {
             .trim_end(),
         answer_fixture_source(3, 2).trim_end()
     );
+}
+
+#[test]
+fn code_repair_provider_error_records_sanitized_command_span() {
+    let dir = TempDir::new().unwrap();
+    write_cargo_answer_fixture(&dir, 1, 2);
+    let task = "Trigger repair provider failure privately";
+    let body = "synthetic repair provider body OPENAI_API_KEY=sk-12345678901234567890";
+    let provider =
+        start_mock_provider_then_error(answer_patch_plan("plan-initial-bad", 1, 3), 400, body);
+
+    let output = mimir_cmd(&dir, &provider.url)
+        .args([
+            "code",
+            "--editable",
+            "src/lib.rs",
+            "--max-repair-turns",
+            "1",
+            "--json",
+            task,
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(report["rejected"]
+        .as_str()
+        .unwrap()
+        .contains("repair_provider_error"));
+    let first_request = provider
+        .requests
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    let repair_request = provider
+        .requests
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    assert!(first_request.contains("Propose a safe patch"));
+    assert!(repair_request.contains("Repair the previously applied Mimir patch"));
+
+    let run_id = report["run_id"].as_str().unwrap();
+    let run_dir = dir.path().join(".mimir/runs").join(run_id);
+    assert_sanitized_error_trace(
+        &run_dir,
+        "mimir.code",
+        &[task, "src/lib.rs", body, "synthetic repair provider body"],
+    );
+    let trace_text = std::fs::read_to_string(run_dir.join("trace.spans.jsonl")).unwrap();
+    let provider_errors = trace_spans(&trace_text)
+        .into_iter()
+        .filter(|span| {
+            span["name"] == "mimir.provider.dispatch" && span["attrs"]["status"] == "error"
+        })
+        .count();
+    assert_eq!(provider_errors, 1);
 }
 
 #[test]

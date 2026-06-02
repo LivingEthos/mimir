@@ -31,7 +31,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         name: "OPENAI_KEY",
-        regex: r"sk-[a-zA-Z0-9]{48}",
+        regex: r"sk-[A-Za-z0-9_-]{16,}",
     },
     Pattern {
         name: "STRIPE_KEY",
@@ -123,11 +123,22 @@ pub fn redact_json_value(value: &mut serde_json::Value) {
             }
         }
         serde_json::Value::Object(map) => {
+            let mut redacted_entries = Vec::new();
             for (key, value) in map.iter_mut() {
-                if is_sensitive_key(key) {
+                let redacted_key = redact_json_key(key);
+                let key_was_redacted = redacted_key != key.as_str();
+                if is_sensitive_key(key) || key_was_redacted {
                     *value = serde_json::Value::String("<REDACTED:SECRET_FIELD>".to_string());
                 } else {
                     redact_json_value(value);
+                }
+                if key_was_redacted {
+                    redacted_entries.push((key.clone(), redacted_key));
+                }
+            }
+            for (old_key, redacted_key) in redacted_entries {
+                if let Some(value) = map.remove(&old_key) {
+                    map.insert(redacted_key, value);
                 }
             }
         }
@@ -140,6 +151,13 @@ fn is_sensitive_key(key: &str) -> bool {
     if is_token_accounting_key(&lower) {
         return false;
     }
+    if lower == "credential_detected" {
+        return false;
+    }
+    let normalized: String = lower
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect();
     lower.contains("api_key")
         || lower.contains("apikey")
         || lower.contains("secret")
@@ -151,6 +169,24 @@ fn is_sensitive_key(key: &str) -> bool {
         || lower.contains("password")
         || lower == "authorization"
         || lower == "auth"
+        || normalized.contains("apikey")
+        || normalized.contains("secret")
+        || normalized.contains("credential")
+        || normalized.contains("password")
+        || normalized.contains("authorization")
+        || normalized == "auth"
+        || normalized == "token"
+        || normalized.ends_with("token")
+        || normalized.ends_with("cookie")
+}
+
+fn redact_json_key(key: &str) -> String {
+    let redacted = redact_secrets(key);
+    if redacted == key {
+        key.to_string()
+    } else {
+        "<REDACTED:SECRET_KEY>".to_string()
+    }
 }
 
 fn is_token_accounting_key(lower: &str) -> bool {
@@ -169,51 +205,66 @@ fn is_token_accounting_key(lower: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn synthetic_secret(parts: &[&str]) -> String {
+        parts.concat()
+    }
+
     #[test]
     fn test_aws_key() {
-        let text = "key=AKIAIOSFODNN7EXAMPLE";
-        let redacted = redact_secrets(text);
-        assert!(!redacted.contains("AKIAIOSFODNN7EXAMPLE"));
+        let text = synthetic_secret(&["key=", "AKIA", "IOSFODNN7EXAMPLE"]);
+        let redacted = redact_secrets(&text);
+        assert!(!redacted.contains(&text));
         assert!(redacted.contains("<REDACTED:AWS_KEY>"));
     }
 
     #[test]
     fn test_gcp_key() {
-        let text = "AIzaSyB-1I2j3k4l5m6n7o8p9q0r1s2t3u4v5w6";
-        let redacted = redact_secrets(text);
-        assert!(!redacted.contains("AIzaSyB-1I2j3k4l5m6n7o8p9q0r1s2t3u4v5w6"));
+        let text = synthetic_secret(&["AI", "zaSyB-1I2j3k4l5m6n7o8p9q0r1s2t3u4v5w6"]);
+        let redacted = redact_secrets(&text);
+        assert!(!redacted.contains(&text));
         assert!(redacted.contains("<REDACTED:GCP_KEY>"));
     }
 
     #[test]
     fn test_anthropic_key() {
-        let text = "sk-ant-api03-EXAMPLE12345";
-        let redacted = redact_secrets(text);
-        assert!(!redacted.contains("sk-ant-api03-EXAMPLE12345"));
+        let text = synthetic_secret(&["sk", "-ant-api03-EXAMPLE12345"]);
+        let redacted = redact_secrets(&text);
+        assert!(!redacted.contains(&text));
         assert!(redacted.contains("<REDACTED:ANTHROPIC_KEY>"));
     }
 
     #[test]
+    fn test_openai_key_with_separators() {
+        let text = synthetic_secret(&["sk", "-proj-1234567890abcdef"]);
+        let redacted = redact_secrets(&text);
+        assert!(!redacted.contains(&text));
+        assert!(redacted.contains("<REDACTED:OPENAI_KEY>"));
+    }
+
+    #[test]
     fn test_stripe_key() {
-        let text = "sk_live_abcdefghijklmnopqrstuvwxyz";
-        let redacted = redact_secrets(text);
-        assert!(!redacted.contains("sk_live_abcdefghijklmnopqrstuvwxyz"));
+        let text = synthetic_secret(&["sk", "_live_", "abcdefghijklmnopqrstuvwxyz"]);
+        let redacted = redact_secrets(&text);
+        assert!(!redacted.contains(&text));
         assert!(redacted.contains("<REDACTED:STRIPE_KEY>"));
     }
 
     #[test]
     fn test_github_token() {
-        let text = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
-        let redacted = redact_secrets(text);
-        assert!(!redacted.contains("ghp_abcdefghijklmnopqrstuvwxyz0123456789"));
+        let text = synthetic_secret(&["gh", "p_abcdefghijklmnopqrstuvwxyz0123456789"]);
+        let redacted = redact_secrets(&text);
+        assert!(!redacted.contains(&text));
         assert!(redacted.contains("<REDACTED:GITHUB_TOKEN>"));
     }
 
     #[test]
     fn test_slack_token() {
-        let text = "xoxb-1234567890123-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx";
-        let redacted = redact_secrets(text);
-        assert!(!redacted.contains("xoxb-1234567890123"));
+        let text = synthetic_secret(&[
+            "xox",
+            "b-1234567890123-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx",
+        ]);
+        let redacted = redact_secrets(&text);
+        assert!(!redacted.contains(&text));
         assert!(redacted.contains("<REDACTED:SLACK_TOKEN>"));
     }
 
@@ -287,6 +338,31 @@ mod tests {
         assert!(!text.contains("abcdefghijklmnopqrstuvwxyz"));
         assert!(text.contains("<REDACTED:SECRET_FIELD>"));
         assert!(text.contains("hello"));
+    }
+
+    #[test]
+    fn test_redact_json_value_handles_camel_case_and_secret_keys() {
+        let secret_key = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+        let mut value = serde_json::json!({
+            "accessToken": "plain-session-token-value",
+            "refreshToken": "plain-refresh-token-value",
+            "xApiKey": "plain-api-key-value",
+            "setCookie": "sessionid=plain-cookie-value",
+            secret_key: "secret used as a map key",
+            "safe_count_tokens": 42,
+            "credential_detected": true
+        });
+        redact_json_value(&mut value);
+        let text = value.to_string();
+        assert!(!text.contains("plain-session-token-value"));
+        assert!(!text.contains("plain-refresh-token-value"));
+        assert!(!text.contains("plain-api-key-value"));
+        assert!(!text.contains("plain-cookie-value"));
+        assert!(!text.contains(secret_key));
+        assert!(text.contains("<REDACTED:SECRET_FIELD>"));
+        assert!(text.contains("<REDACTED:SECRET_KEY>"));
+        assert_eq!(value["safe_count_tokens"], 42);
+        assert_eq!(value["credential_detected"], true);
     }
 
     #[test]

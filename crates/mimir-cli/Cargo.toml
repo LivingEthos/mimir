@@ -1,6 +1,6 @@
 [package]
 name = "mimir-cli"
-version = "0.1.0"
+version = "1.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -27,6 +27,7 @@ mimir-eval = { path = "../mimir-eval" }
 mimir-edit = { path = "../mimir-edit" }
 mimir-review = { path = "../mimir-review" }
 mimir-subagents = { path = "../mimir-subagents" }
+mimir-session = { path = "../mimir-session" }
 mimir-server = { path = "../mimir-server" }
 mimir-tui = { path = "../mimir-tui" }
 clap = { version = "4", features = ["derive"] }

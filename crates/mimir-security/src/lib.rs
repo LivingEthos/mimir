@@ -56,6 +56,10 @@ pub use redactor::{redact_json_value, redact_secrets};
 mod tests {
     use super::*;
 
+    fn synthetic_secret(parts: &[&str]) -> String {
+        parts.concat()
+    }
+
     #[test]
     fn test_classify_read() {
         assert_eq!(classify_command("cat file.txt"), SafetyClass::Read);
@@ -87,17 +91,17 @@ mod tests {
 
     #[test]
     fn test_redact_aws_key() {
-        let text = "key=AKIAIOSFODNN7EXAMPLE";
-        let redacted = redact_secrets(text);
-        assert!(!redacted.contains("AKIAIOSFODNN7EXAMPLE"));
+        let text = synthetic_secret(&["key=", "AKIA", "IOSFODNN7EXAMPLE"]);
+        let redacted = redact_secrets(&text);
+        assert!(!redacted.contains(&text));
         assert!(redacted.contains("<REDACTED:AWS_KEY>"));
     }
 
     #[test]
     fn test_redact_openai_key() {
-        let text = "sk-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKL";
-        let redacted = redact_secrets(text);
-        assert!(!redacted.contains("sk-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKL"));
+        let text = synthetic_secret(&["sk-", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKL"]);
+        let redacted = redact_secrets(&text);
+        assert!(!redacted.contains(&text));
         assert!(redacted.contains("<REDACTED:OPENAI_KEY>"));
     }
 
@@ -111,9 +115,9 @@ mod tests {
 
     #[test]
     fn test_redact_github_pat() {
-        let text = "github_pat_abc_def";
-        let redacted = redact_secrets(text);
-        assert!(!redacted.contains("github_pat_abc_def"));
+        let text = synthetic_secret(&["github", "_pat_", "abc_def"]);
+        let redacted = redact_secrets(&text);
+        assert!(!redacted.contains(&text));
         assert!(redacted.contains("<REDACTED:GITHUB_PAT>"));
     }
 

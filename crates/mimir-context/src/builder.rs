@@ -1,6 +1,8 @@
 //! Context packet builder.
 
-use std::path::PathBuf;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use mimir_runs::RunId;
 use mimir_schemas::{
@@ -17,6 +19,7 @@ pub struct ContextBuilder {
     provider: Option<String>,
     model: Option<String>,
     repo_root: Option<PathBuf>,
+    repo_index: Option<Arc<mimir_index::RepoIndex>>,
     edit_targets: Vec<String>,
 }
 
@@ -26,6 +29,11 @@ struct RetrievedContext {
     recall_guard_flags: Vec<RecallGuardFlag>,
     included_tokens: u32,
 }
+
+const ALWAYS_GUIDANCE_FILES: &[&str] = &[".mimir/project-rules.md", "AGENTS.md", "CLAUDE.md"];
+const TASK_RELEVANT_GUIDANCE_FILES: &[&str] = &["README.md", "docs/HANDOFF.md"];
+const MAX_GUIDANCE_FILE_TOKENS: u32 = 4_096;
+const MAX_GUIDANCE_TOTAL_TOKENS: u32 = 8_192;
 
 impl ContextBuilder {
     /// Create a new builder.
@@ -69,6 +77,12 @@ impl ContextBuilder {
         self
     }
 
+    /// Reuse a prebuilt repository index for retrieval-backed packet construction.
+    pub fn repo_index(mut self, index: impl Into<Arc<mimir_index::RepoIndex>>) -> Self {
+        self.repo_index = Some(index.into());
+        self
+    }
+
     /// Set explicit edit targets for retrieval sufficiency checks.
     pub fn edit_targets(mut self, targets: Vec<String>) -> Self {
         self.edit_targets = targets;
@@ -101,7 +115,12 @@ impl ContextBuilder {
         let count_drift_reserve_tokens =
             mimir_providers::capabilities::DEFAULT_COUNT_DRIFT_RESERVE_TOKENS;
 
-        let retrieved = build_retrieved_context(self.repo_root, &task_goal, &self.edit_targets)?;
+        let retrieved = build_retrieved_context(
+            self.repo_root,
+            self.repo_index.as_deref(),
+            &task_goal,
+            &self.edit_targets,
+        )?;
         let task_tokens = mimir_providers::count::count_local(&task_goal);
         let estimated_input_tokens = task_tokens
             .saturating_add(retrieved.included_tokens)
@@ -174,6 +193,7 @@ fn normalize_mode(mode: &str) -> String {
 
 fn build_retrieved_context(
     repo_root: Option<PathBuf>,
+    repo_index: Option<&mimir_index::RepoIndex>,
     task_card: &str,
     edit_targets: &[String],
 ) -> Result<RetrievedContext, anyhow::Error> {
@@ -186,15 +206,58 @@ fn build_retrieved_context(
         });
     };
 
-    let index = mimir_index::build_index(&root)?;
+    let owned_index;
+    let index = if let Some(index) = repo_index {
+        index
+    } else {
+        owned_index = mimir_index::build_index(&root)?;
+        &owned_index
+    };
     let config = mimir_retrieval::PipelineConfig::default();
-    let pipeline = mimir_retrieval::run_pipeline(&index, task_card, edit_targets, &config);
+    let pipeline = mimir_retrieval::run_pipeline(index, task_card, edit_targets, &config);
 
     let mut total_tokens = 0u32;
     let mut included = Vec::new();
     let mut omitted_candidates = Vec::new();
+    include_repository_guidance(
+        &root,
+        task_card,
+        edit_targets,
+        &mut included,
+        &mut omitted_candidates,
+        &mut total_tokens,
+    );
+    let mut included_paths = included
+        .iter()
+        .map(|item| item.path.clone())
+        .collect::<BTreeSet<_>>();
     for item in pipeline.manifest.included {
+        if included_paths.contains(&item.path) {
+            continue;
+        }
+        if !mimir_index::is_indexable_path(Path::new(&item.path)) {
+            omitted_candidates.push(policy_omission(
+                &item.path,
+                item.estimated_tokens,
+                "generated_file_policy",
+                "Use a source or documentation file instead of generated or packaged artifacts.",
+            ));
+            continue;
+        }
         let path = root.join(&item.path);
+        let metadata = match std::fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        if !mimir_index::is_indexable_file(Path::new(&item.path), metadata.len()) {
+            omitted_candidates.push(policy_omission(
+                &item.path,
+                item.estimated_tokens,
+                "large_file_threshold",
+                "Request this file explicitly with a narrower range or reduce its size.",
+            ));
+            continue;
+        }
         let content = match std::fs::read_to_string(&path) {
             Ok(content) => content,
             Err(_) => continue,
@@ -222,6 +285,7 @@ fn build_retrieved_context(
             continue;
         }
         total_tokens = total_tokens.saturating_add(token_count);
+        included_paths.insert(item.path.clone());
         included.push(IncludedItem {
             path: item.path.clone(),
             ranges: item
@@ -280,6 +344,134 @@ fn build_retrieved_context(
         recall_guard_flags,
         included_tokens: total_tokens,
     })
+}
+
+fn include_repository_guidance(
+    root: &Path,
+    task_card: &str,
+    edit_targets: &[String],
+    included: &mut Vec<IncludedItem>,
+    omitted_candidates: &mut Vec<OmittedCandidate>,
+    total_tokens: &mut u32,
+) {
+    let mut guidance_tokens = 0u32;
+    let mut candidates = ALWAYS_GUIDANCE_FILES.to_vec();
+    if should_include_task_relevant_guidance(task_card) {
+        candidates.extend_from_slice(TASK_RELEVANT_GUIDANCE_FILES);
+    }
+
+    for relative_path in candidates {
+        let path = root.join(relative_path);
+        if !path.is_file() {
+            continue;
+        }
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(_) => continue,
+        };
+        let token_count = mimir_providers::count::count_local(&content);
+        let source_hash = sha256_hex(content.as_bytes());
+        if contains_secret_like_text(&content) {
+            omitted_candidates.push(guidance_omission(
+                relative_path,
+                token_count,
+                Some(source_hash),
+                "secret_risk",
+                "Remove secret-like material before including this repository guidance file.",
+            ));
+            continue;
+        }
+        if token_count > MAX_GUIDANCE_FILE_TOKENS
+            || guidance_tokens.saturating_add(token_count) > MAX_GUIDANCE_TOTAL_TOKENS
+        {
+            omitted_candidates.push(guidance_omission(
+                relative_path,
+                token_count,
+                Some(source_hash),
+                "large_file_threshold",
+                "Shorten this guidance file or split durable rules into .mimir/project-rules.md.",
+            ));
+            continue;
+        }
+        guidance_tokens = guidance_tokens.saturating_add(token_count);
+        *total_tokens = total_tokens.saturating_add(token_count);
+        included.push(IncludedItem {
+            path: relative_path.to_string(),
+            ranges: vec![ContextRange {
+                start: 1,
+                end: u32::MAX,
+            }],
+            candidate_kind: "full_file".to_string(),
+            reason_code: "manifest_reference".to_string(),
+            tokens: token_count,
+            source_hash,
+            trust_level: "trusted".to_string(),
+            editable: edit_targets.iter().any(|target| target == relative_path),
+        });
+    }
+}
+
+fn should_include_task_relevant_guidance(task_card: &str) -> bool {
+    let task = task_card.to_ascii_lowercase();
+    [
+        "agent",
+        "contributor",
+        "development",
+        "documentation",
+        "handoff",
+        "onboarding",
+        "readme",
+        "workflow",
+    ]
+    .iter()
+    .any(|needle| task.contains(needle))
+}
+
+fn guidance_omission(
+    path: &str,
+    token_count: u32,
+    source_hash: Option<String>,
+    reason_for_omission: &str,
+    trigger: &str,
+) -> OmittedCandidate {
+    OmittedCandidate {
+        schema_version: 1,
+        path: path.to_string(),
+        ranges: Vec::new(),
+        candidate_kind: "full_file".to_string(),
+        reason_code: "manifest_reference".to_string(),
+        score: 0.0,
+        features: serde_json::json!({ "repository_guidance": 1.0 }),
+        estimated_tokens: token_count,
+        discovered_by: vec!["repository_guidance".to_string()],
+        source_hash,
+        reason_for_omission: reason_for_omission.to_string(),
+        risk: None,
+        what_would_trigger_inclusion: trigger.to_string(),
+    }
+}
+
+fn policy_omission(
+    path: &str,
+    token_count: u32,
+    reason_for_omission: &str,
+    trigger: &str,
+) -> OmittedCandidate {
+    OmittedCandidate {
+        schema_version: 1,
+        path: path.to_string(),
+        ranges: Vec::new(),
+        candidate_kind: "full_file".to_string(),
+        reason_code: "embedding_match".to_string(),
+        score: 0.0,
+        features: serde_json::json!({ "index_policy": 1.0 }),
+        estimated_tokens: token_count,
+        discovered_by: vec!["manifest".to_string()],
+        source_hash: None,
+        reason_for_omission: reason_for_omission.to_string(),
+        risk: None,
+        what_would_trigger_inclusion: trigger.to_string(),
+    }
 }
 
 fn contains_secret_like_text(text: &str) -> bool {
@@ -399,6 +591,136 @@ mod tests {
         assert_eq!(packet.included[0].path, "ContextBuilder.rs");
         assert!(packet.included[0].tokens > 0);
         assert_eq!(packet.included[0].source_hash.len(), 64);
+    }
+
+    #[test]
+    fn build_uses_supplied_repo_index() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("indexed.rs"),
+            "pub struct IndexedContext;\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("unindexed.rs"), "pub struct GhostMatch;\n").unwrap();
+        std::fs::create_dir_all(dir.path().join("target/debug")).unwrap();
+        std::fs::write(
+            dir.path().join("target/debug/generated.rs"),
+            "pub struct PackagedArtifact;\n",
+        )
+        .unwrap();
+        let oversized_unit = "pub struct OversizedArtifact;\n";
+        let oversized_source = oversized_unit
+            .repeat((mimir_index::MAX_INDEXED_FILE_BYTES as usize / oversized_unit.len()) + 1);
+        std::fs::write(dir.path().join("huge.rs"), oversized_source).unwrap();
+
+        let mut index = mimir_index::RepoIndex::new();
+        index.add(mimir_index::FileEntry {
+            path: "indexed.rs".to_string(),
+            language: "rust".to_string(),
+            content_hash: "indexed".to_string(),
+            token_count: 1,
+            exports: vec!["IndexedContext".to_string()],
+            imports: Vec::new(),
+        });
+        index.add(mimir_index::FileEntry {
+            path: "target/debug/generated.rs".to_string(),
+            language: "rust".to_string(),
+            content_hash: "generated".to_string(),
+            token_count: 1,
+            exports: vec!["PackagedArtifact".to_string()],
+            imports: Vec::new(),
+        });
+        index.add(mimir_index::FileEntry {
+            path: "huge.rs".to_string(),
+            language: "rust".to_string(),
+            content_hash: "huge".to_string(),
+            token_count: 1,
+            exports: vec!["OversizedArtifact".to_string()],
+            imports: Vec::new(),
+        });
+
+        let packet = ContextBuilder::new()
+            .run_id(RunId("20260101-120000-abcdef07".to_string()))
+            .task_card("GhostMatch IndexedContext PackagedArtifact OversizedArtifact")
+            .repo_root(dir.path())
+            .repo_index(Arc::new(index))
+            .provider("glm")
+            .model("glm-5.1")
+            .build()
+            .unwrap();
+
+        assert!(packet.included.iter().any(|item| item.path == "indexed.rs"));
+        assert!(!packet
+            .included
+            .iter()
+            .any(|item| item.path == "unindexed.rs"));
+        assert!(!packet
+            .included
+            .iter()
+            .any(|item| item.path == "target/debug/generated.rs"));
+        assert!(!packet.included.iter().any(|item| item.path == "huge.rs"));
+        assert!(packet.omitted_candidates.iter().any(|item| {
+            item.path == "target/debug/generated.rs"
+                && item.reason_for_omission == "generated_file_policy"
+        }));
+        assert!(packet.omitted_candidates.iter().any(|item| {
+            item.path == "huge.rs" && item.reason_for_omission == "large_file_threshold"
+        }));
+    }
+
+    #[test]
+    fn build_includes_repository_guidance_files() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "# Agent rules\nRead first.\n").unwrap();
+        std::fs::write(dir.path().join("feature.rs"), "pub fn feature() {}\n").unwrap();
+
+        let packet = ContextBuilder::new()
+            .run_id(RunId("20260101-120000-abcdef05".to_string()))
+            .task_card("feature")
+            .repo_root(dir.path())
+            .provider("glm")
+            .model("glm-5.1")
+            .build()
+            .unwrap();
+
+        let guidance = packet
+            .included
+            .iter()
+            .find(|item| item.path == "AGENTS.md")
+            .expect("AGENTS.md should be included as repository guidance");
+        assert_eq!(guidance.reason_code, "manifest_reference");
+        assert!(!guidance.editable);
+    }
+
+    #[test]
+    fn build_omits_secret_like_repository_guidance() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("AGENTS.md"),
+            [
+                "Do not leak sk",
+                "-ant-api03-abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuAA.\n",
+            ]
+            .concat(),
+        )
+        .unwrap();
+
+        let packet = ContextBuilder::new()
+            .run_id(RunId("20260101-120000-abcdef06".to_string()))
+            .task_card("feature")
+            .repo_root(dir.path())
+            .provider("glm")
+            .model("glm-5.1")
+            .build()
+            .unwrap();
+
+        assert!(!packet.included.iter().any(|item| item.path == "AGENTS.md"));
+        let omitted = packet
+            .omitted_candidates
+            .iter()
+            .find(|item| item.path == "AGENTS.md")
+            .expect("secret-like AGENTS.md should be omitted with evidence");
+        assert_eq!(omitted.reason_for_omission, "secret_risk");
     }
 
     #[test]

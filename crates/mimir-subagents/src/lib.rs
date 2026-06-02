@@ -2,7 +2,7 @@
 //!
 //! Phase 5 deliverables:
 //! - Deterministic file-analyst (no LLM)
-//! - Read-only LLM subagent stubs
+//! - Deterministic provider-free subagent execution with read-only local evidence
 //! - EvidenceSummary schema
 //! - Subagent packet lineage
 //! - Tool schema compiler with deferred catalog

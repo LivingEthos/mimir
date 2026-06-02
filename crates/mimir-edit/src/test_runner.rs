@@ -154,8 +154,8 @@ fn run_test_command(
     };
 
     let reader_timeout = Duration::from_millis(500);
-    let stdout = join_capped_reader(stdout_reader, "stdout", reader_timeout)?;
-    let mut stderr = join_capped_reader(stderr_reader, "stderr", reader_timeout)?;
+    let stdout = join_capped_reader(stdout_reader, "stdout", reader_timeout, timed_out)?;
+    let mut stderr = join_capped_reader(stderr_reader, "stderr", reader_timeout, timed_out)?;
     if timed_out {
         stderr.push_str(&format!(
             "\n[test command timed out after {}ms]",
@@ -422,10 +422,20 @@ fn join_capped_reader(
     reader: mpsc::Receiver<Result<String>>,
     stream_name: &str,
     timeout: Duration,
+    command_timed_out: bool,
 ) -> Result<String> {
-    reader
-        .recv_timeout(timeout)
-        .map_err(|_| EditError::Io(format!("test {stream_name} reader timed out")))?
+    match reader.recv_timeout(timeout) {
+        Ok(output) => output,
+        Err(mpsc::RecvTimeoutError::Timeout) if command_timed_out => Ok(format!(
+            "\n[test {stream_name} reader did not close after command timeout]"
+        )),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(EditError::Io(format!(
+            "test {stream_name} reader timed out"
+        ))),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(EditError::Io(format!(
+            "test {stream_name} reader disconnected before returning output"
+        ))),
+    }
 }
 
 fn truncate(s: &str, max_len: usize) -> String {

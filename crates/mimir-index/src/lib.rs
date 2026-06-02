@@ -21,6 +21,23 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+/// Maximum byte size for a single file to enter the repository index.
+pub const MAX_INDEXED_FILE_BYTES: u64 = 1_048_576;
+const ALWAYS_GENERATED_DIR_NAMES: &[&str] = &[
+    ".next",
+    ".turbo",
+    ".vite",
+    "coverage",
+    "node_modules",
+    "target",
+];
+const AMBIGUOUS_OUTPUT_DIR_NAMES: &[&str] = &["build", "dist", "out"];
+const BINARY_OR_PACKAGED_EXTENSIONS: &[&str] = &[
+    "7z", "a", "bin", "bmp", "class", "dll", "dmg", "dylib", "exe", "gif", "gz", "ico", "jar",
+    "jpeg", "jpg", "lockb", "map", "mp3", "mp4", "o", "otf", "pdf", "png", "rlib", "so", "tar",
+    "tgz", "ttf", "wasm", "webp", "woff", "woff2", "xz", "zip", "zst",
+];
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -268,6 +285,16 @@ pub fn content_hash(content: &[u8]) -> String {
     blake3::hash(content).to_hex().to_string()
 }
 
+/// Return whether a repository-relative path is safe and useful to index.
+pub fn is_indexable_path(path: &Path) -> bool {
+    !path_has_generated_component(path) && !is_binary_or_packaged_path(path)
+}
+
+/// Return whether a repository-relative path and byte size are safe to index.
+pub fn is_indexable_file(path: &Path, byte_len: u64) -> bool {
+    is_indexable_path(path) && byte_len <= MAX_INDEXED_FILE_BYTES
+}
+
 // ---------------------------------------------------------------------------
 // File walking
 // ---------------------------------------------------------------------------
@@ -287,10 +314,16 @@ pub fn walk_files(root: &Path) -> impl Iterator<Item = PathBuf> + '_ {
         .filter_map(|entry| entry.ok())
         .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
         .filter_map(move |e| {
-            e.path()
+            let rel = e
+                .path()
                 .strip_prefix(root)
                 .ok()
-                .map(std::path::Path::to_path_buf)
+                .map(std::path::Path::to_path_buf)?;
+            if !is_indexable_path(&rel) {
+                None
+            } else {
+                Some(rel)
+            }
         })
 }
 
@@ -466,17 +499,22 @@ pub fn build_index(root: &Path) -> Result<RepoIndex> {
     let mut index = RepoIndex::new();
     for rel in walk_files(root) {
         let full = root.join(&rel);
+        if !is_indexable_file(&rel, fs::metadata(&full)?.len()) {
+            continue;
+        }
         let bytes = fs::read(&full)?;
+        let Some(text) = text_content_for_index(&bytes) else {
+            continue;
+        };
         let hash = content_hash(&bytes);
-        let text = String::from_utf8_lossy(&bytes);
-        let lang = detect_language(&rel, Some(&text));
-        let imports = extract_imports(&text, &lang);
-        let exports = extract_exports(&text, &lang);
+        let lang = detect_language(&rel, Some(text));
+        let imports = extract_imports(text, &lang);
+        let exports = extract_exports(text, &lang);
         let entry = FileEntry {
             path: rel.to_string_lossy().to_string(),
             language: lang,
             content_hash: hash,
-            token_count: estimate_tokens(&text),
+            token_count: estimate_tokens(text),
             exports,
             imports,
         };
@@ -487,6 +525,62 @@ pub fn build_index(root: &Path) -> Result<RepoIndex> {
 
 fn estimate_tokens(text: &str) -> u32 {
     (text.chars().count() as u32).div_ceil(4)
+}
+
+fn path_has_generated_component(path: &Path) -> bool {
+    let components = path_components(path);
+    components
+        .iter()
+        .any(|component| ALWAYS_GENERATED_DIR_NAMES.contains(&component.as_str()))
+        || is_known_output_path(&components)
+        || components.get(0..2).is_some_and(|prefix| {
+            prefix[0] == "packages" && is_generated_platform_package(&prefix[1])
+        })
+}
+
+fn is_binary_or_packaged_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .is_some_and(|extension| BINARY_OR_PACKAGED_EXTENSIONS.contains(&extension.as_str()))
+}
+
+fn text_content_for_index(bytes: &[u8]) -> Option<&str> {
+    if bytes.contains(&0) {
+        return None;
+    }
+    std::str::from_utf8(bytes).ok()
+}
+
+fn path_components(path: &Path) -> Vec<String> {
+    path.components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .map(str::to_string)
+        .collect()
+}
+
+fn is_known_output_path(components: &[String]) -> bool {
+    components
+        .first()
+        .is_some_and(|component| AMBIGUOUS_OUTPUT_DIR_NAMES.contains(&component.as_str()))
+        || components
+            .get(0)
+            .is_some_and(|component| component == "apps")
+            && components
+                .get(2)
+                .is_some_and(|component| AMBIGUOUS_OUTPUT_DIR_NAMES.contains(&component.as_str()))
+        || components
+            .get(0)
+            .is_some_and(|component| component == "packages")
+            && components
+                .get(2)
+                .is_some_and(|component| AMBIGUOUS_OUTPUT_DIR_NAMES.contains(&component.as_str()))
+}
+
+fn is_generated_platform_package(name: &str) -> bool {
+    name.starts_with("cli-darwin-")
+        || name.starts_with("cli-linux-")
+        || name.starts_with("cli-win32-")
 }
 
 // ---------------------------------------------------------------------------
@@ -776,6 +870,102 @@ use std::collections::HashMap;
         let py = index.get("hello.py").unwrap();
         assert_eq!(py.language, "python");
         assert!(py.exports.contains(&"hello".to_string()));
+    }
+
+    #[test]
+    fn build_index_skips_binary_oversized_and_generated_artifacts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("docs/build")).unwrap();
+        fs::create_dir_all(root.join("docs/source")).unwrap();
+        fs::create_dir_all(root.join("build")).unwrap();
+        fs::create_dir_all(root.join("dist")).unwrap();
+        fs::create_dir_all(root.join("out")).unwrap();
+        fs::create_dir_all(root.join("apps/studio/dist")).unwrap();
+        fs::create_dir_all(root.join("packages/sdk/dist")).unwrap();
+        fs::create_dir_all(root.join("packages/cli-darwin-arm64")).unwrap();
+        fs::create_dir_all(root.join("packages/cli-linux-x64")).unwrap();
+        fs::create_dir_all(root.join("packages/cli-win32-x64")).unwrap();
+        fs::create_dir_all(root.join("target/debug")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn normal_source() {}\n").unwrap();
+        fs::write(root.join("src/nul.rs"), b"pub fn nul_source() {}\0").unwrap();
+        fs::write(root.join("docs/guide.md"), "# Guide\n").unwrap();
+        fs::write(root.join("docs/build/README.md"), "# Build notes\n").unwrap();
+        fs::write(root.join("docs/source/reference.md"), "# Source docs\n").unwrap();
+        fs::write(
+            root.join("build/app.js"),
+            "export const rootBuild = true;\n",
+        )
+        .unwrap();
+        fs::write(root.join("dist/app.js"), "export const rootDist = true;\n").unwrap();
+        fs::write(root.join("out/app.js"), "export const rootOut = true;\n").unwrap();
+        fs::write(
+            root.join("apps/studio/dist/app.js"),
+            "export const generated = true;\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("packages/sdk/dist/index.js"),
+            "export const packaged = true;\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("packages/cli-darwin-arm64/package.json"),
+            "{\"name\":\"@mimir/cli-darwin-arm64\"}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("packages/cli-linux-x64/package.json"),
+            "{\"name\":\"@mimir/cli-linux-x64\"}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("packages/cli-win32-x64/package.json"),
+            "{\"name\":\"@mimir/cli-win32-x64\"}\n",
+        )
+        .unwrap();
+        fs::write(root.join("image.png"), b"\x89PNG\r\n\x1a\n\0secret bytes").unwrap();
+        fs::write(root.join("IMAGE.PNG"), b"\x89PNG\r\n\x1a\n\0secret bytes").unwrap();
+        fs::write(root.join("bundle.WASM"), b"\0asmartifact").unwrap();
+        fs::write(root.join("blob.bin"), b"hello\0binary").unwrap();
+        fs::write(root.join("invalid_utf8.rs"), b"pub fn nope() {}\xff").unwrap();
+        fs::write(
+            root.join("huge.rs"),
+            "x".repeat(MAX_INDEXED_FILE_BYTES as usize + 1),
+        )
+        .unwrap();
+        fs::write(
+            root.join("target/debug/generated.rs"),
+            "pub fn generated_artifact() {}\n",
+        )
+        .unwrap();
+
+        let index = build_index(root).unwrap();
+
+        assert!(index.get("src/lib.rs").is_some());
+        assert!(index.get("docs/guide.md").is_some());
+        assert!(index.get("docs/build/README.md").is_some());
+        assert!(index.get("docs/source/reference.md").is_some());
+        assert!(index.get("build/app.js").is_none());
+        assert!(index.get("dist/app.js").is_none());
+        assert!(index.get("out/app.js").is_none());
+        assert!(index.get("apps/studio/dist/app.js").is_none());
+        assert!(index.get("packages/sdk/dist/index.js").is_none());
+        assert!(index
+            .get("packages/cli-darwin-arm64/package.json")
+            .is_none());
+        assert!(index.get("packages/cli-linux-x64/package.json").is_none());
+        assert!(index.get("packages/cli-win32-x64/package.json").is_none());
+        assert!(index.get("image.png").is_none());
+        assert!(index.get("IMAGE.PNG").is_none());
+        assert!(index.get("bundle.WASM").is_none());
+        assert!(index.get("blob.bin").is_none());
+        assert!(index.get("invalid_utf8.rs").is_none());
+        assert!(index.get("src/nul.rs").is_none());
+        assert!(index.get("huge.rs").is_none());
+        assert!(index.get("target/debug/generated.rs").is_none());
     }
 
     #[test]

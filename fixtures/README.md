@@ -2,6 +2,15 @@
 
 Generated from the Mimir workspace itself.
 
+`context-recall-v1.yaml` is the production context-recall dataset used by:
+
+```bash
+mimir eval context --dataset fixtures/context-recall-v1.yaml
+```
+
+The legacy `fixture-*.yaml` files remain as readable source cases; the dataset file
+normalizes them into schema-shaped `EvalCase` entries.
+
 | # | ID | Mode | Description |
 |---|-----|------|-------------|
 | 1 | mode0-simple-ask | 0 | Simple question about a single file |
