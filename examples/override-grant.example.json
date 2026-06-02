@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "grant_id": "grant-01941a8e-7c",
+  "request_id": "ovr-01941a8e-3a",
+  "run_id": "20260518-141522-a3f9b2c1",
+  "granted_cap": 128000,
+  "reason": "Need 128k tokens to compare the v2 and v3 migration scripts side-by-side.",
+  "granted_by": "auto_after_failures",
+  "prior_failures": 3,
+  "auto_grant_after": 3,
+  "granted_at": "2026-05-18T14:30:14Z"
+}

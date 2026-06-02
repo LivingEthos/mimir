@@ -444,6 +444,9 @@ enum OverrideCmd {
         /// Auto-grant after N failed attempts.
         #[arg(long, default_value = "3")]
         auto_grant_after: u32,
+        /// Attach to an existing run and count its prior failed attempts.
+        #[arg(long)]
+        run_id: Option<String>,
     },
 }
 
@@ -1674,6 +1677,46 @@ fn append_redacted_event(run_dir: &RunDir, event: &serde_json::Value) -> Result<
     mimir_security::redact_json_value(&mut event);
     run_dir.append_event(&event)?;
     Ok(())
+}
+
+/// Run event types that count as a failed attempt toward an override auto-grant.
+///
+/// These mark a prior attempt to complete work that failed under the current
+/// cap or safety boundary: cost-cap aborts, rejected patches, and failing tests.
+const OVERRIDE_FAILURE_EVENT_TYPES: &[&str] = &[
+    "cost_cap_aborted",
+    "repair_cost_cap_preflight_exceeded",
+    "patch_rejected",
+    "repair_patch_rejected",
+    "patch_tests_failed",
+    "override_attempt_failed",
+];
+
+/// Count prior failed attempts recorded in a run's `events.jsonl`.
+///
+/// A missing event log means zero prior failures. Lines that are not valid JSON
+/// are skipped rather than treated as failures.
+fn count_override_failed_attempts(run_dir: &RunDir) -> Result<u32> {
+    if !run_dir.events_path().exists() {
+        return Ok(0);
+    }
+    let data = run_dir.read_events_to_string()?;
+    let mut count: u32 = 0;
+    for line in data.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if let Some(event_type) = value.get("event_type").and_then(serde_json::Value::as_str) {
+            if OVERRIDE_FAILURE_EVENT_TYPES.contains(&event_type) {
+                count = count.saturating_add(1);
+            }
+        }
+    }
+    Ok(count)
 }
 
 fn contains_secret_like_text(text: &str) -> bool {
@@ -5192,27 +5235,104 @@ fn main() -> Result<()> {
                 cap,
                 reason,
                 auto_grant_after,
+                run_id,
             } => {
-                let run_id = RunId::generate();
-                let req = mimir_schemas::OverrideRequest {
-                    schema_version: 1,
-                    request_id: RunId::generate().to_string(),
-                    run_id: run_id.to_string(),
-                    reason: format!(
-                        "{} (cap: {}, auto_grant: {})",
-                        reason, cap, auto_grant_after
-                    ),
-                    requested_by: "cli".to_string(),
-                };
                 let mimir_root = camino::Utf8PathBuf::from(".mimir");
-                let run_dir = RunDir::create(&mimir_root, &run_id)?;
-                let req_json = serde_json::to_vec_pretty(&req)?;
-                atomic_write(&run_dir.root().join("override_request.json"), &req_json)?;
-                println!("Override request recorded: {}", run_id);
+                // Attach to an existing run to count its prior failed attempts, or
+                // create a fresh run when none is supplied (zero prior failures).
+                let (run_dir, run_id, prior_failures) = match run_id {
+                    Some(existing) => {
+                        let parsed = RunId::parse(existing.clone())
+                            .map_err(|_| anyhow!("invalid run id: {existing}"))?;
+                        let run_dir = RunDir::open(&mimir_root, &parsed)
+                            .map_err(|error| anyhow!("no run found for {existing}: {error}"))?;
+                        let failures = count_override_failed_attempts(&run_dir)?;
+                        (run_dir, parsed, failures)
+                    }
+                    None => {
+                        let generated = RunId::generate();
+                        let run_dir = RunDir::create(&mimir_root, &generated)?;
+                        (run_dir, generated, 0)
+                    }
+                };
+
+                // Drive the grant decision through the reviewed auto-grant engine.
+                let mut manager = mimir_review::override_req::OverrideManager::new();
+                manager.default_threshold = auto_grant_after;
+                let request_id = manager
+                    .request_with_failures(
+                        format!("context_cap:{cap}"),
+                        reason.clone(),
+                        "cli",
+                        prior_failures,
+                    )
+                    .map_err(|error| anyhow!("override request failed: {error}"))?;
+                let request = manager
+                    .get(&request_id)
+                    .expect("override request was just inserted")
+                    .clone();
+                let auto_granted = request.auto_granted;
+
+                // Persist the request artifact and a structured, redacted audit event.
+                write_redacted_json(&run_dir.root().join("override_request.json"), &request)?;
+                append_redacted_event(
+                    &run_dir,
+                    &serde_json::json!({
+                        "event_type": "override_requested",
+                        "timestamp": chrono::Utc::now().to_rfc3339(),
+                        "request_id": request_id,
+                        "run_id": run_id.to_string(),
+                        "requested_cap": cap,
+                        "reason": reason,
+                        "requested_by": "cli",
+                        "auto_grant_after": auto_grant_after,
+                        "prior_failures": prior_failures,
+                        "auto_granted": auto_granted,
+                    }),
+                )?;
+
+                println!("Override request recorded: {}", request_id);
+                println!("  Run ID: {}", run_id);
                 println!("  Requested cap: {} tokens", cap);
-                println!("  Reason: {}", req.reason);
+                println!("  Reason: {}", reason);
+                println!("  Prior failed attempts: {}", prior_failures);
                 println!("  Auto-grant after: {} failed attempts", auto_grant_after);
-                println!("  Status: pending approval");
+
+                if auto_granted {
+                    // The threshold was satisfied: record a grant artifact + audit event.
+                    let grant = mimir_schemas::OverrideGrant {
+                        schema_version: 1,
+                        grant_id: format!("grant-{request_id}"),
+                        request_id: request_id.clone(),
+                        run_id: run_id.to_string(),
+                        granted_cap: cap,
+                        reason: reason.clone(),
+                        granted_by: "auto_after_failures".to_string(),
+                        prior_failures,
+                        auto_grant_after,
+                        granted_at: chrono::Utc::now().to_rfc3339(),
+                    };
+                    write_redacted_json(&run_dir.root().join("override_grant.json"), &grant)?;
+                    append_redacted_event(
+                        &run_dir,
+                        &serde_json::json!({
+                            "event_type": "override_granted",
+                            "timestamp": chrono::Utc::now().to_rfc3339(),
+                            "grant_id": grant.grant_id,
+                            "request_id": request_id,
+                            "run_id": run_id.to_string(),
+                            "granted_cap": cap,
+                            "granted_by": "auto_after_failures",
+                            "reason": reason,
+                            "prior_failures": prior_failures,
+                            "auto_grant_after": auto_grant_after,
+                        }),
+                    )?;
+                    println!("  Grant recorded: {}", grant.grant_id);
+                    println!("  Status: granted (auto_after_failures)");
+                } else {
+                    println!("  Status: pending approval");
+                }
             }
         },
         Commands::Trace { cmd } => match cmd {

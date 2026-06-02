@@ -498,8 +498,8 @@ pub enum PatchStep {
 #[cfg(test)]
 mod patch_plan_tests {
     use super::{
-        ExecutablePatchPlan, PatchEditKind, PatchPlan, PatchStep, PlanArtifact, TraceSpan,
-        TraceSpanEvent, TraceSpanKind, TraceSpanStatus, TraceSpanStatusCode,
+        ExecutablePatchPlan, OverrideGrant, PatchEditKind, PatchPlan, PatchStep, PlanArtifact,
+        TraceSpan, TraceSpanEvent, TraceSpanKind, TraceSpanStatus, TraceSpanStatusCode,
     };
 
     fn assert_example_validates(schema_json: &str, example_json: &str) {
@@ -679,6 +679,42 @@ mod patch_plan_tests {
         assert!(value.get("start").is_none());
         assert!(value.get("attributes").is_none());
     }
+
+    #[test]
+    fn deserializes_override_grant_example() {
+        assert_example_validates(
+            include_str!("../../../schemas/OverrideGrant.schema.json"),
+            include_str!("../../../examples/override-grant.example.json"),
+        );
+
+        let grant: OverrideGrant = serde_json::from_str(include_str!(
+            "../../../examples/override-grant.example.json"
+        ))
+        .unwrap();
+        assert_eq!(grant.schema_version, 1);
+        assert_eq!(grant.granted_by, "auto_after_failures");
+        assert_eq!(grant.prior_failures, 3);
+        assert_eq!(grant.auto_grant_after, 3);
+    }
+
+    #[test]
+    fn override_grant_schema_rejects_unknown_granted_by() {
+        assert_example_rejected(
+            include_str!("../../../schemas/OverrideGrant.schema.json"),
+            serde_json::json!({
+                "schema_version": 1,
+                "grant_id": "grant-1",
+                "request_id": "ovr-1",
+                "run_id": "20260518-141522-a3f9b2c1",
+                "granted_cap": 128000,
+                "reason": "test",
+                "granted_by": "totally_not_allowed",
+                "prior_failures": 3,
+                "auto_grant_after": 3,
+                "granted_at": "2026-05-18T14:30:14Z"
+            }),
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -826,6 +862,25 @@ pub struct OverrideRequest {
     pub run_id: String,
     pub reason: String,
     pub requested_by: String,
+}
+
+// ---------------------------------------------------------------------------
+// OverrideGrant
+// ---------------------------------------------------------------------------
+
+/// Recorded grant of an above-default cap override.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OverrideGrant {
+    pub schema_version: u32,
+    pub grant_id: String,
+    pub request_id: String,
+    pub run_id: String,
+    pub granted_cap: u32,
+    pub reason: String,
+    pub granted_by: String,
+    pub prior_failures: u32,
+    pub auto_grant_after: u32,
+    pub granted_at: String,
 }
 
 // ---------------------------------------------------------------------------

@@ -36,6 +36,7 @@ These schemas are normative. Rust and TypeScript types in `mimir-schemas` and `@
 | `ReviewResult.schema.json` | ReviewResult |
 | `EvidenceSummary.schema.json` | EvidenceSummary |
 | `OverrideRequest.schema.json` | OverrideRequest |
+| `OverrideGrant.schema.json` | OverrideGrant |
 | `MemoryEntry.schema.json` | MemoryEntry |
 | `DriftReport.schema.json` | DriftReport |
 | `EvalCase.schema.json` | EvalCase |
