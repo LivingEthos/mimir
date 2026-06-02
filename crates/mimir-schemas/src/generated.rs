@@ -164,6 +164,7 @@ pub struct MemoryEntry {
     pub safe_to_send: bool,
     pub created_at: String,
     pub last_verified_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub staleness_policy: Option<StalenessPolicy>,
     pub retrieval_tags: Vec<String>,
     pub imported_from: Option<ImportedFrom>,
@@ -173,6 +174,7 @@ pub struct MemoryEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceEvidence {
     pub kind: String,
+    #[serde(rename = "ref")]
     pub ref_: String,
 }
 
@@ -205,22 +207,94 @@ pub struct ImportedFrom {
 // EvalCase & EvalResult
 // ---------------------------------------------------------------------------
 
-/// A single eval case.
+/// A single eval fixture: prompt plus gold context expectations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalCase {
-    pub case_id: String,
-    pub description: String,
-    pub input: serde_json::Value,
-    pub expected: serde_json::Value,
+    pub schema_version: u32,
+    pub id: String,
+    pub repo_path: String,
+    pub base_commit: String,
+    pub task: String,
+    pub gold: EvalCaseGold,
+    #[serde(default)]
+    pub expected_tests: Vec<String>,
+    pub allowed_mode: String,
+    #[serde(default)]
+    pub allowed_caps_to_test: Vec<u32>,
+    #[serde(default)]
+    pub generated: bool,
 }
 
-/// Result of running an eval case.
+/// Gold context expectations for an eval case.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalCaseGold {
+    pub files: Vec<String>,
+    pub ranges: Vec<EvalCaseGoldRange>,
+    #[serde(default)]
+    pub distractors: Vec<String>,
+}
+
+/// A gold source range for an eval case.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalCaseGoldRange {
+    pub path: String,
+    pub start: u32,
+    pub end: u32,
+}
+
+/// Result of running an EvalCase in a specific mode and cap.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalResult {
+    pub schema_version: u32,
     pub case_id: String,
-    pub passed: bool,
-    pub score: f64,
-    pub notes: String,
+    pub mode: String,
+    pub cap_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    pub metrics: EvalMetrics,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packet_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    pub ran_at: String,
+}
+
+/// Metrics emitted by a context eval run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalMetrics {
+    pub file_recall: f64,
+    pub range_recall: f64,
+    pub precision: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tokens_per_useful_line: Option<f64>,
+    pub critical_omission_count: u32,
+    pub cap_compliance: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_count_agreement_p95: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packet_build_latency_ms: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retrieval_latency_ms: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_map_refresh_latency_ms: Option<u32>,
+    pub e2e_latency_ms: u32,
+    pub tokens_in_total: u32,
+    pub tokens_out_total: u32,
+    pub cost_usd_total: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repair_turns: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub override_used: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_cost_to_success: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index_cache_hit_rate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_hit_rate: Option<f64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -423,7 +497,10 @@ pub enum PatchStep {
 
 #[cfg(test)]
 mod patch_plan_tests {
-    use super::{ExecutablePatchPlan, PatchEditKind, PatchPlan, PatchStep, PlanArtifact};
+    use super::{
+        ExecutablePatchPlan, PatchEditKind, PatchPlan, PatchStep, PlanArtifact, TraceSpan,
+        TraceSpanEvent, TraceSpanKind, TraceSpanStatus, TraceSpanStatusCode,
+    };
 
     fn assert_example_validates(schema_json: &str, example_json: &str) {
         let schema: serde_json::Value = serde_json::from_str(schema_json).unwrap();
@@ -566,6 +643,42 @@ mod patch_plan_tests {
         });
         assert!(serde_json::from_value::<ExecutablePatchPlan>(extra_step_field).is_err());
     }
+
+    #[test]
+    fn trace_span_rust_type_matches_schema_shape() {
+        let span = TraceSpan {
+            schema_version: 1,
+            span_id: "0123456789abcdef".to_string(),
+            trace_id: Some("0123456789abcdef0123456789abcdef".to_string()),
+            parent_id: None,
+            name: "mimir.context.build".to_string(),
+            kind: Some(TraceSpanKind::Internal),
+            start_us: 1,
+            end_us: 2,
+            attrs: Some(serde_json::json!({"packet_id": "pkt-example"})),
+            events: Some(vec![TraceSpanEvent {
+                at_us: 2,
+                name: "packet.persisted".to_string(),
+                attrs: None,
+            }]),
+            status: Some(TraceSpanStatus {
+                code: Some(TraceSpanStatusCode::Ok),
+                message: None,
+            }),
+        };
+        let value = serde_json::to_value(span).unwrap();
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../../../schemas/TraceSpan.schema.json")).unwrap();
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        let errors = validator
+            .iter_errors(&value)
+            .map(|error| error.to_string())
+            .collect::<Vec<_>>();
+
+        assert!(errors.is_empty(), "schema validation failed: {errors:#?}");
+        assert!(value.get("start").is_none());
+        assert!(value.get("attributes").is_none());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -587,13 +700,65 @@ pub struct AuditEvent {
 
 /// A trace span.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TraceSpan {
+    pub schema_version: u32,
     pub span_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
     pub name: String,
-    pub start: String,
-    pub end: Option<String>,
-    pub attributes: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<TraceSpanKind>,
+    pub start_us: u64,
+    pub end_us: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attrs: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events: Option<Vec<TraceSpanEvent>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<TraceSpanStatus>,
+}
+
+/// OpenTelemetry span kind.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceSpanKind {
+    Internal,
+    Client,
+    Server,
+    Producer,
+    Consumer,
+}
+
+/// A trace span event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TraceSpanEvent {
+    pub at_us: u64,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attrs: Option<serde_json::Value>,
+}
+
+/// Trace span status.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TraceSpanStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<TraceSpanStatusCode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Trace span status code.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceSpanStatusCode {
+    Unset,
+    Ok,
+    Error,
 }
 
 // ---------------------------------------------------------------------------

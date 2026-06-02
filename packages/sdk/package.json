@@ -1,6 +1,7 @@
 {
   "name": "@mimir/sdk",
-  "version": "0.7.0",
+  "version": "1.0.0",
+  "private": true,
   "description": "TypeScript types for Mimir CLI schemas",
   "types": "index.d.ts",
   "files": [
@@ -12,6 +13,7 @@
     "generate": "node scripts/generate.mjs",
     "build": "node scripts/build.mjs",
     "check:schema-drift": "node scripts/check-drift.mjs",
+    "prepack": "npm run generate && npm run check:schema-drift && npm run build",
     "clean": "node -e \"require('node:fs').rmSync('index.d.ts',{force:true})\""
   },
   "devDependencies": {
@@ -21,6 +23,6 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mimir/mimir.git"
+    "url": "git+https://github.com/MisterWonderful/mimir.git"
   }
 }

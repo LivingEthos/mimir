@@ -64,6 +64,11 @@ assert(
   "ExecutablePatchPlan.ts must model non-empty steps",
 );
 
+const index = readText(join(root, "index.d.ts"));
+for (const schema of checks.map(([name]) => name)) {
+  assert(index.includes(`export * from "./${schema}";`), `index.d.ts missing root export for ${schema}`);
+}
+
 if (failures.length > 0) {
   console.error(failures.map((failure) => `- ${failure}`).join("\n"));
   process.exit(1);

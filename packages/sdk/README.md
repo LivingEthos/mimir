@@ -2,12 +2,19 @@
 
 TypeScript types generated from Mimir JSON Schemas.
 
+The SDK currently covers core artifact schemas only. Mimir Studio's local
+HTTP/WebSocket DTOs, including `workspace_name` response fields, live in
+`apps/studio/src/api/types.ts` until those UI contracts are promoted into
+shared schemas.
+
 ## Usage
 
 ```typescript
-import type { ContextPacket } from '@mimir/sdk/ContextPacket';
-import type { ExecutablePatchPlan } from '@mimir/sdk/ExecutablePatchPlan';
-import type { ProviderCapabilitiesList } from '@mimir/sdk/ProviderCapabilitiesList';
+import type {
+  ContextPacket,
+  ExecutablePatchPlan,
+  ProviderCapabilitiesList,
+} from '@mimir/sdk';
 
 const packet: ContextPacket = {
   schema_version: 1,

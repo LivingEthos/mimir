@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { readdirSync, rmSync } from "node:fs";
+import { readdirSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -10,16 +10,23 @@ const sources = readdirSync(root)
   .filter((name) => name.endsWith(".ts") && name !== "index.d.ts")
   .sort();
 
-rmSync(join(root, "index.d.ts"), { force: true });
+const header = `/* eslint-disable */
+/**
+ * TypeScript declaration barrel for Mimir JSON Schemas.
+ * Regenerate with npm run build.
+ */
+
+`;
+const exports = sources
+  .map((source) => `export * from "./${basename(source, ".ts")}";`)
+  .join("\n");
+writeFileSync(join(root, "index.d.ts"), `${header}${exports}\n`);
 
 const commonArgs = [
-  "--declaration",
-  "--emitDeclarationOnly",
+  "--noEmit",
   "--lib",
   "es2020",
   "--skipLibCheck",
-  "--outFile",
-  "index.d.ts",
   ...sources,
 ];
 const result = spawnSync(

@@ -58,7 +58,7 @@ export interface MemoryEntry {
    * If this entry was imported from another tool's sessions, the source.
    */
   imported_from?: {
-    tool?: "claude-code" | "codex" | "aider" | "mimir";
+    tool?: "claude-code" | "codex" | "aider" | "opencode" | "mimir";
     session_id?: string;
   } | null;
 }
