@@ -6,6 +6,23 @@ Replayable Context for coding agents.
 
 Mimir is a coding CLI built around a Context Governor that produces hashable, replayable context packets capped at ~64k tokens by default. Every prompt is an inspectable, shareable, replayable manifest.
 
+## Install
+
+```bash
+brew tap LivingEthos/mimir
+brew install mimir
+mimir --version
+```
+
+For source evaluation:
+
+```bash
+git clone https://github.com/LivingEthos/mimir.git
+cd mimir
+cargo build --release
+./target/release/mimir --version
+```
+
 ## Quick Start
 
 ```bash
