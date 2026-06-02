@@ -1679,6 +1679,25 @@ fn append_redacted_event(run_dir: &RunDir, event: &serde_json::Value) -> Result<
     Ok(())
 }
 
+/// Reject a trace-export destination that is a symlink or other non-regular file.
+///
+/// A missing target is allowed (the export creates it). An existing regular file
+/// is allowed (it is overwritten). Anything else — a symlink, directory, fifo —
+/// is refused so the export cannot be redirected through a symlink.
+fn validate_trace_export_output_path(path: &str) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            bail!("refusing to write trace export through symlink: {path}")
+        }
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            bail!("refusing to overwrite non-regular trace export target: {path}")
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => bail!("trace export target '{path}' could not be inspected: {error}"),
+    }
+}
+
 /// Run event types that count as a failed attempt toward an override auto-grant.
 ///
 /// These mark a prior attempt to complete work that failed under the current
@@ -5368,8 +5387,16 @@ fn main() -> Result<()> {
                     },
                 };
                 if redact {
+                    // Scrub secret values, then normalize local filesystem paths
+                    // so absolute workspace paths are not leaked in the export.
+                    let workspace_root = std::fs::canonicalize(".")
+                        .ok()
+                        .and_then(|path| camino::Utf8PathBuf::from_path_buf(path).ok());
                     for event in &mut events {
                         mimir_security::redact_json_value(event);
+                        if let Some(root) = workspace_root.as_deref() {
+                            mimir_runs::redact_trace_paths(event, root);
+                        }
                     }
                 }
                 let export = serde_json::json!({
@@ -5380,6 +5407,7 @@ fn main() -> Result<()> {
                 });
                 let export_json = serde_json::to_string_pretty(&export)?;
                 if let Some(out) = output {
+                    validate_trace_export_output_path(&out)?;
                     std::fs::write(&out, export_json)?;
                     println!("Trace exported to {}", out);
                 } else {

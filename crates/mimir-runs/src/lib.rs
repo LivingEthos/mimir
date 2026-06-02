@@ -282,6 +282,16 @@ fn canonical_utf8(path: &Utf8Path) -> std::io::Result<Utf8PathBuf> {
     })
 }
 
+/// Scrub local filesystem paths from an arbitrary trace/event JSON value.
+///
+/// Path-like fields and string values are rewritten so absolute paths under
+/// `workspace_root` become workspace-relative and any remaining secrets are
+/// redacted. Used by trace-export redaction so on-disk and exported spans get
+/// the same path treatment that [`RunDir::append_trace_span`] applies on write.
+pub fn redact_trace_paths(value: &mut Value, workspace_root: &Utf8Path) {
+    sanitize_trace_paths(value, workspace_root);
+}
+
 fn sanitize_trace_paths(value: &mut Value, workspace_root: &Utf8Path) {
     match value {
         Value::Object(map) => {

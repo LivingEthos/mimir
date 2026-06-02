@@ -17,6 +17,10 @@ const PACKET_SHARE_BUNDLE_KIND: &str = "mimir.packet_share";
 const PACKET_SHARE_BUNDLE_SCHEMA_VERSION: u32 = 1;
 const MAX_PROVIDER_REQUEST_ARTIFACT_BYTES: usize = 256 * 1024;
 const MAX_CONTEXT_PACKET_ARTIFACT_BYTES: usize = 1024 * 1024;
+/// Upper bound for an on-disk shared packet bundle: a full context packet plus
+/// the redacted provider request plus JSON envelope overhead.
+const MAX_SHARED_BUNDLE_ARTIFACT_BYTES: usize =
+    MAX_CONTEXT_PACKET_ARTIFACT_BYTES + MAX_PROVIDER_REQUEST_ARTIFACT_BYTES + 64 * 1024;
 
 /// Portable redacted packet share bundle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -221,6 +225,28 @@ pub fn share_bundle_preview_for_run(
 /// # Errors
 /// Returns an error when the bundle cannot be read or fails integrity checks.
 pub fn read_shared_packet_bundle(path: &Path) -> Result<SharedPacketBundle> {
+    // Reject symlinks and non-regular files, and cap the on-disk size before
+    // reading — mirrors the hardening on `read_regular_artifact_bytes`.
+    let metadata = fs::symlink_metadata(path).map_err(|err| {
+        anyhow!(
+            "shared packet bundle '{}' could not be inspected: {err}",
+            path.display()
+        )
+    })?;
+    if !metadata.file_type().is_file() {
+        bail!(
+            "shared packet bundle '{}' is not a regular file",
+            path.display()
+        );
+    }
+    if metadata.len() > MAX_SHARED_BUNDLE_ARTIFACT_BYTES as u64 {
+        bail!(
+            "shared packet bundle '{}' exceeds size cap ({} bytes > {} bytes)",
+            path.display(),
+            metadata.len(),
+            MAX_SHARED_BUNDLE_ARTIFACT_BYTES
+        );
+    }
     let data = fs::read_to_string(path).map_err(|err| {
         anyhow!(
             "shared packet bundle '{}' could not be read: {err}",
@@ -895,6 +921,36 @@ mod tests {
             .expect_err("symlink provider request must fail")
             .to_string();
         assert!(error.contains("not a regular file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_shared_packet_bundle_rejects_symlinked_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A valid regular bundle file the symlink points at — proves the
+        // rejection is driven by the symlink, not by bad target content.
+        let real = dir.path().join("real-bundle.json");
+        fs::write(&real, br#"{"kind":"mimir.packet_share"}"#).expect("write real bundle");
+        let link = dir.path().join("bundle-link.json");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink bundle");
+
+        let error = read_shared_packet_bundle(&link)
+            .expect_err("symlinked bundle must be rejected")
+            .to_string();
+        assert!(error.contains("is not a regular file"), "{error}");
+    }
+
+    #[test]
+    fn read_shared_packet_bundle_rejects_oversized_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("huge-bundle.json");
+        fs::write(&path, vec![b' '; MAX_SHARED_BUNDLE_ARTIFACT_BYTES + 1])
+            .expect("write oversized bundle");
+
+        let error = read_shared_packet_bundle(&path)
+            .expect_err("oversized bundle must be rejected")
+            .to_string();
+        assert!(error.contains("exceeds size cap"), "{error}");
     }
 
     fn write_empty_run(root: &Utf8Path, run_id: &str) -> Utf8PathBuf {
