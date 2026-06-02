@@ -13,8 +13,8 @@ pub mod store;
 
 pub use engine::{MemoryDecisionEngine, ScoreSignals, ScoreWeights};
 pub use importers::{
-    importer_for, AiderImporter, ClaudeCodeImporter, CodexImporter, OpenCodeImporter,
-    SessionImporter,
+    discover_sessions, importer_for, AiderImporter, ClaudeCodeImporter, CodexImporter,
+    DiscoveredSession, DiscoveryRoots, OpenCodeImporter, SessionImporter,
 };
 pub use publish::{clear_published, publish, read_published};
 pub use store::{AuditRecord, MemoryStore, StrategyRecord};

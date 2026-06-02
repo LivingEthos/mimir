@@ -1,7 +1,12 @@
 //! Integration tests for loading live data into the TUI App.
 
-use mimir_schemas::{ContextPacket, TaskCard};
-use mimir_tui::App;
+use mimir_schemas::{ContextPacket, ContextRange, IncludedItem, OmittedCandidate, TaskCard};
+use mimir_tui::{
+    panels::{IncludedPanel, OmittedPanel},
+    server_client::{fetch_live_packet, LiveServerConfig},
+    App,
+};
+use std::time::Duration;
 
 /// Returns a minimal valid ContextPacket for testing serialization.
 fn minimal_packet() -> ContextPacket {
@@ -43,6 +48,19 @@ fn minimal_packet() -> ContextPacket {
     }
 }
 
+fn lines_text(lines: Vec<ratatui::text::Line<'static>>) -> String {
+    lines
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .into_iter()
+                .map(|span| span.content.into_owned())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
 fn test_load_packet_from_file() {
     let packet = minimal_packet();
@@ -64,6 +82,163 @@ fn test_load_packet_from_file() {
 
     // cleanup
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn test_packet_only_included_and_omitted_panels_use_packet_data() {
+    let mut packet = minimal_packet();
+    packet.included = vec![IncludedItem {
+        path: "src/lib.rs".to_string(),
+        ranges: vec![ContextRange { start: 3, end: 8 }],
+        candidate_kind: "range".to_string(),
+        reason_code: "direct_user_mention".to_string(),
+        tokens: 42,
+        source_hash: "a".repeat(64),
+        trust_level: "trusted".to_string(),
+        editable: true,
+    }];
+    packet.omitted_candidates = vec![OmittedCandidate {
+        schema_version: 1,
+        path: "tests/lib_test.rs".to_string(),
+        ranges: vec![ContextRange { start: 1, end: 20 }],
+        candidate_kind: "test".to_string(),
+        reason_code: "budget_limit".to_string(),
+        score: 0.55,
+        features: serde_json::json!({ "kind": "test" }),
+        estimated_tokens: 80,
+        discovered_by: vec!["test_map".to_string()],
+        source_hash: None,
+        reason_for_omission: "budget_limit".to_string(),
+        risk: Some("medium".to_string()),
+        what_would_trigger_inclusion: "more budget".to_string(),
+    }];
+
+    let mut app = App::new();
+    app.load_packet(packet);
+
+    let included = lines_text(IncludedPanel::lines(&app));
+    assert!(included.contains("Items: 1 | Tokens: 42"));
+    assert!(included.contains("src/lib.rs"));
+    assert!(included.contains("3-8"));
+
+    let omitted = lines_text(OmittedPanel::lines(&app));
+    assert!(omitted.contains("Omitted: 1"));
+    assert!(omitted.contains("tests/lib_test.rs"));
+    assert!(omitted.contains("budget_limit"));
+    assert!(omitted.contains("medium"));
+}
+
+#[test]
+fn test_refresh_without_live_server_reports_missing_config() {
+    let mut app = App::new();
+    app.request_live_refresh();
+    assert_eq!(app.status, "No live server configured");
+}
+
+#[tokio::test]
+async fn test_live_server_client_fetches_context_packet() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("tui_live_marker.rs"),
+        "pub fn tui_live_marker() -> &'static str { \"synthetic\" }\n",
+    )
+    .unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server_handle = tokio::spawn(async move {
+        mimir_server::run_tcp_server(listener, mimir_server::SessionStore::new())
+            .await
+            .unwrap();
+    });
+
+    let mut config = LiveServerConfig::new(addr.to_string(), "Use tui_live_marker");
+    config.provider = Some("anthropic".to_string());
+    config.model = Some("claude-sonnet-4-20250514".to_string());
+    config.workspace_root = Some(dir.path().to_path_buf());
+    config.timeout = Duration::from_secs(2);
+
+    let live = fetch_live_packet(&config).await.unwrap();
+    assert!(!live.session_id.is_empty());
+    assert!(live
+        .packet
+        .included
+        .iter()
+        .any(|item| item.path == "tui_live_marker.rs"));
+
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn test_live_server_client_recovers_from_stale_session() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("tui_live_stale_marker.rs"),
+        "pub fn tui_live_stale_marker() -> &'static str { \"synthetic\" }\n",
+    )
+    .unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server_handle = tokio::spawn(async move {
+        mimir_server::run_tcp_server(listener, mimir_server::SessionStore::new())
+            .await
+            .unwrap();
+    });
+
+    let mut config = LiveServerConfig::new(addr.to_string(), "Use tui_live_stale_marker");
+    config.provider = Some("anthropic".to_string());
+    config.model = Some("claude-sonnet-4-20250514".to_string());
+    config.session_id = Some("stale-session".to_string());
+    config.workspace_root = Some(dir.path().to_path_buf());
+    config.timeout = Duration::from_secs(2);
+
+    let live = fetch_live_packet(&config).await.unwrap();
+    assert_ne!(live.session_id, "stale-session");
+    assert!(live
+        .packet
+        .included
+        .iter()
+        .any(|item| item.path == "tui_live_stale_marker.rs"));
+    assert_eq!(live.packet.provider, "anthropic");
+    assert_eq!(live.packet.model, "claude-sonnet-4-20250514");
+
+    server_handle.abort();
+}
+
+#[test]
+fn test_interval_refresh_backs_off_after_failure() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+
+    let mut config = LiveServerConfig::new(addr.to_string(), "Refresh against closed port");
+    config.refresh_interval = Some(Duration::from_secs(60));
+    config.timeout = Duration::from_millis(20);
+
+    let mut app = App::new();
+    app.set_live_server(config);
+
+    app.maybe_request_interval_refresh();
+    assert_eq!(app.status, "Refreshing from live server...");
+
+    for _ in 0..50 {
+        app.poll_live_refresh();
+        if app.status.starts_with("Live refresh failed:") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    assert!(
+        app.status.starts_with("Live refresh failed:"),
+        "expected failed refresh status, got {}",
+        app.status
+    );
+    let failure_status = app.status.clone();
+
+    app.maybe_request_interval_refresh();
+    assert_eq!(app.status, failure_status);
 }
 
 #[test]

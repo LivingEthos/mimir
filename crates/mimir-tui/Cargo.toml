@@ -21,4 +21,6 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]
+mimir-server = { path = "../mimir-server" }
 tokio = { workspace = true }
+tempfile = { workspace = true }

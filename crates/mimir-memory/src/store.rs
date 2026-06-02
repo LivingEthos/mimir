@@ -7,7 +7,7 @@ use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, Row};
 use tracing::{debug, info};
 
-use mimir_schemas::MemoryEntry;
+use mimir_schemas::{MemoryEntry, SourceEvidence};
 
 use crate::MemoryError;
 
@@ -289,7 +289,7 @@ impl MemoryStore {
              FROM entries WHERE entry_id = ?1",
         )?;
         let row = stmt.query_row([id], Self::row_to_entry).optional()?;
-        Ok(row)
+        row.map(|entry| self.hydrate_entry(entry)).transpose()
     }
 
     /// List all entries, optionally filtered by kind and scope.
@@ -335,7 +335,7 @@ impl MemoryStore {
         let rows = stmt.query_map(param_refs.as_slice(), Self::row_to_entry)?;
         let mut entries = Vec::new();
         for row in rows {
-            entries.push(row?);
+            entries.push(self.hydrate_entry(row?)?);
         }
         Ok(entries)
     }
@@ -357,7 +357,7 @@ impl MemoryStore {
         let rows = stmt.query_map([query], Self::row_to_entry)?;
         let mut entries = Vec::new();
         for row in rows {
-            entries.push(row?);
+            entries.push(self.hydrate_entry(row?)?);
         }
         Ok(entries)
     }
@@ -572,6 +572,32 @@ impl MemoryStore {
         })
     }
 
+    fn hydrate_entry(&self, mut entry: MemoryEntry) -> Result<MemoryEntry, MemoryError> {
+        entry.source_evidence = self.source_evidence(&entry.entry_id)?;
+        Ok(entry)
+    }
+
+    fn source_evidence(&self, entry_id: &str) -> Result<Vec<SourceEvidence>, MemoryError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT kind, ref_
+             FROM source_evidence
+             WHERE entry_id = ?1
+             ORDER BY rowid ASC",
+        )?;
+        let rows = stmt.query_map([entry_id], |row| {
+            Ok(SourceEvidence {
+                kind: row.get(0)?,
+                ref_: row.get(1)?,
+            })
+        })?;
+
+        let mut evidence = Vec::new();
+        for row in rows {
+            evidence.push(row?);
+        }
+        Ok(evidence)
+    }
+
     fn row_to_strategy(row: &Row<'_>) -> Result<StrategyRecord, rusqlite::Error> {
         Ok(StrategyRecord {
             strategy_id: row.get(0)?,
@@ -654,13 +680,13 @@ mod tests {
         MemoryEntry {
             schema_version: 1,
             entry_id: id.to_string(),
-            kind: "lesson".to_string(),
+            kind: "experience".to_string(),
             body: "Use Result instead of unwrap in Rust".to_string(),
             source_evidence: vec![SourceEvidence {
                 kind: "run".to_string(),
                 ref_: "run-123".to_string(),
             }],
-            confidence: "proposed".to_string(),
+            confidence: "provisional".to_string(),
             promotion_score: Some(0.75),
             promotion_breakdown: Some(PromotionBreakdown {
                 severity_score: 0.8,
@@ -670,7 +696,7 @@ mod tests {
                 token_savings_score: 0.5,
                 total: 0.75,
             }),
-            scope: "project".to_string(),
+            scope: "repo_shared".to_string(),
             safe_to_send: true,
             created_at: "2024-01-01T00:00:00Z".to_string(),
             last_verified_at: None,
@@ -701,8 +727,10 @@ mod tests {
 
         let fetched = store.get("entry-1").unwrap().unwrap();
         assert_eq!(fetched.entry_id, "entry-1");
-        assert_eq!(fetched.kind, "lesson");
-        assert_eq!(fetched.confidence, "proposed");
+        assert_eq!(fetched.kind, "experience");
+        assert_eq!(fetched.confidence, "provisional");
+        assert_eq!(fetched.source_evidence.len(), 1);
+        assert_eq!(fetched.source_evidence[0].kind, "run");
         assert!(fetched.safe_to_send);
         assert_eq!(fetched.retrieval_tags, vec!["rust", "error-handling"]);
     }
@@ -711,21 +739,22 @@ mod tests {
     fn test_list_filtered() {
         let store = MemoryStore::open_in_memory();
         let mut e1 = sample_entry("e1");
-        e1.kind = "lesson".to_string();
-        e1.scope = "project".to_string();
+        e1.kind = "experience".to_string();
+        e1.scope = "repo_shared".to_string();
         let mut e2 = sample_entry("e2");
-        e2.kind = "pattern".to_string();
+        e2.kind = "error".to_string();
         e2.scope = "global".to_string();
         store.insert(&e1).unwrap();
         store.insert(&e2).unwrap();
 
-        let lessons = store.list(Some("lesson"), None, None).unwrap();
-        assert_eq!(lessons.len(), 1);
-        assert_eq!(lessons[0].entry_id, "e1");
+        let experience = store.list(Some("experience"), None, None).unwrap();
+        assert_eq!(experience.len(), 1);
+        assert_eq!(experience[0].entry_id, "e1");
 
         let global = store.list(None, Some("global"), None).unwrap();
         assert_eq!(global.len(), 1);
         assert_eq!(global[0].entry_id, "e2");
+        assert_eq!(global[0].source_evidence.len(), 1);
     }
 
     #[test]
@@ -744,6 +773,7 @@ mod tests {
         let results = store.search("Arc").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].entry_id, "e1");
+        assert_eq!(results[0].source_evidence.len(), 1);
 
         let results = store.search("rust").unwrap();
         assert_eq!(results.len(), 2);
@@ -767,15 +797,15 @@ mod tests {
         store.insert(&entry).unwrap();
 
         assert!(store
-            .update_confidence("audit-test", "verified", "human review")
+            .update_confidence("audit-test", "validated", "human review")
             .unwrap());
         let fetched = store.get("audit-test").unwrap().unwrap();
-        assert_eq!(fetched.confidence, "verified");
+        assert_eq!(fetched.confidence, "validated");
 
         let log = store.audit_log("audit-test").unwrap();
         assert_eq!(log.len(), 1);
-        assert_eq!(log[0].old_confidence.as_deref(), Some("proposed"));
-        assert_eq!(log[0].new_confidence, "verified");
+        assert_eq!(log[0].old_confidence.as_deref(), Some("provisional"));
+        assert_eq!(log[0].new_confidence, "validated");
         assert_eq!(log[0].reason, "human review");
     }
 

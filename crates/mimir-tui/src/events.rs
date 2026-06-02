@@ -63,7 +63,7 @@ pub fn handle_key_event(key: KeyEvent, app: &mut App) {
             app.status = "Focused panel: Diff".to_string();
         }
         KeyCode::Char('r') => {
-            app.status = "Refresh requested (stub)".to_string();
+            app.request_live_refresh();
         }
         _ => {
             debug!("Unhandled key: {:?}", key);

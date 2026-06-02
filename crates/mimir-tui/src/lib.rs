@@ -15,8 +15,10 @@
 
 pub mod events;
 pub mod panels;
+pub mod server_client;
 
 use std::io;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crossterm::{
@@ -36,6 +38,7 @@ use tracing::warn;
 
 use mimir_retrieval::PipelineResult;
 use mimir_schemas::{BudgetCategory, BudgetLedger, ContextPacket};
+use server_client::{fetch_live_packet, LivePacket, LiveServerConfig};
 
 use panels::{
     BudgetPanel, DiffPanel, IncludedPanel, OmittedPanel, PermissionsPanel, ProviderCountPanel,
@@ -66,6 +69,29 @@ pub struct App {
     pub last_frame_time: Duration,
     /// Whether we are awaiting a quit confirmation after ESC.
     pub awaiting_quit_confirm: bool,
+    /// Live server refresh configuration.
+    pub live_server: Option<LiveServerConfig>,
+    live_refresh: Option<LiveRefreshState>,
+    last_live_refresh: Option<Instant>,
+    last_live_refresh_attempt: Option<Instant>,
+}
+
+#[derive(Debug)]
+enum LiveRefreshMessage {
+    Packet(Box<LivePacket>),
+    Error(String),
+}
+
+struct LiveRefreshState {
+    receiver: mpsc::Receiver<LiveRefreshMessage>,
+}
+
+impl std::fmt::Debug for LiveRefreshState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiveRefreshState")
+            .field("receiver", &"<pending>")
+            .finish()
+    }
 }
 
 /// A provider count entry.
@@ -115,6 +141,10 @@ impl App {
             status: "Press ESC then q to quit | Ctrl-C exits".to_string(),
             last_frame_time: Duration::ZERO,
             awaiting_quit_confirm: false,
+            live_server: None,
+            live_refresh: None,
+            last_live_refresh: None,
+            last_live_refresh_attempt: None,
         }
     }
 
@@ -185,6 +215,99 @@ impl App {
         Ok(())
     }
 
+    /// Configure live refreshes from a running `mimir serve --port` instance.
+    pub fn set_live_server(&mut self, config: LiveServerConfig) {
+        self.permissions.can_network = true;
+        self.live_server = Some(config);
+        self.last_live_refresh = None;
+        self.last_live_refresh_attempt = None;
+    }
+
+    /// Queue a live refresh if a server is configured and no refresh is running.
+    pub fn request_live_refresh(&mut self) {
+        let Some(config) = self.live_server.clone() else {
+            self.status = "No live server configured".to_string();
+            return;
+        };
+
+        if self.live_refresh.is_some() {
+            self.status = "Live refresh already in progress".to_string();
+            return;
+        }
+
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(anyhow::Error::from)
+                .and_then(|runtime| runtime.block_on(fetch_live_packet(&config)));
+
+            let message = match result {
+                Ok(packet) => LiveRefreshMessage::Packet(Box::new(packet)),
+                Err(error) => LiveRefreshMessage::Error(error.to_string()),
+            };
+            let _ = sender.send(message);
+        });
+
+        self.live_refresh = Some(LiveRefreshState { receiver });
+        self.last_live_refresh_attempt = Some(Instant::now());
+        self.status = "Refreshing from live server...".to_string();
+    }
+
+    /// Apply any completed live refresh result.
+    pub fn poll_live_refresh(&mut self) {
+        let Some(refresh) = self.live_refresh.take() else {
+            return;
+        };
+
+        match refresh.receiver.try_recv() {
+            Ok(LiveRefreshMessage::Packet(packet)) => {
+                let run_id = packet.packet.run_id.clone();
+                if let Some(config) = &mut self.live_server {
+                    config.session_id = Some(packet.session_id);
+                }
+                self.load_packet(packet.packet);
+                self.last_live_refresh = Some(Instant::now());
+                self.status = format!("Live refresh loaded run {run_id}");
+            }
+            Ok(LiveRefreshMessage::Error(error)) => {
+                self.status = format!("Live refresh failed: {error}");
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.live_refresh = Some(refresh);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.status = "Live refresh worker disconnected".to_string();
+            }
+        }
+    }
+
+    /// Queue an interval refresh when live mode configured one.
+    pub fn maybe_request_interval_refresh(&mut self) {
+        let Some(config) = &self.live_server else {
+            return;
+        };
+        let Some(interval) = config.refresh_interval else {
+            return;
+        };
+        if self.live_refresh.is_some() {
+            return;
+        }
+
+        let last_refresh_marker = match (self.last_live_refresh, self.last_live_refresh_attempt) {
+            (Some(success), Some(attempt)) if success > attempt => Some(success),
+            (Some(_), Some(attempt)) => Some(attempt),
+            (Some(success), None) => Some(success),
+            (None, Some(attempt)) => Some(attempt),
+            (None, None) => None,
+        };
+        let should_refresh = last_refresh_marker.is_none_or(|last| last.elapsed() >= interval);
+        if should_refresh {
+            self.request_live_refresh();
+        }
+    }
+
     /// Cycle focus to the next panel.
     pub fn next_panel(&mut self) {
         self.focused_panel = (self.focused_panel + 1) % 6;
@@ -248,6 +371,9 @@ where
         if last_tick.elapsed() >= tick_rate {
             last_tick = Instant::now();
         }
+
+        app.poll_live_refresh();
+        app.maybe_request_interval_refresh();
 
         if app.last_frame_time > Duration::from_millis(16) {
             warn!("Slow frame: {:?} (target < 16ms)", app.last_frame_time);

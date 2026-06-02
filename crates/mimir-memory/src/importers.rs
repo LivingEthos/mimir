@@ -6,14 +6,14 @@
 //! - Codex (`.jsonl` log files)
 //! - OpenCode (`.json` log files)
 
-use std::fs;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::{env, fs};
 
 use chrono::Utc;
 use serde::Deserialize;
 
-use mimir_schemas::{ImportedFrom, MemoryEntry};
+use mimir_schemas::{ImportedFrom, MemoryEntry, SourceEvidence};
 
 use crate::MemoryError;
 
@@ -24,16 +24,107 @@ pub trait SessionImporter {
     /// # Errors
     /// Returns `MemoryError` if the file cannot be read or parsed.
     fn import(&self, path: &str) -> Result<Vec<MemoryEntry>, MemoryError>;
+
+    /// Discover default session files for this importer.
+    ///
+    /// # Errors
+    /// Returns `MemoryError` if a configured discovery root cannot be read.
+    fn discover(&self, roots: &DiscoveryRoots) -> Result<Vec<PathBuf>, MemoryError> {
+        let _ = roots;
+        Ok(Vec::new())
+    }
+}
+
+/// Roots used for safe default session discovery.
+#[derive(Debug, Clone)]
+pub struct DiscoveryRoots {
+    /// Current project directory.
+    pub cwd: PathBuf,
+    /// User home directory.
+    pub home: Option<PathBuf>,
+    /// XDG data home directory.
+    pub xdg_data_home: Option<PathBuf>,
+    /// Codex home directory.
+    pub codex_home: Option<PathBuf>,
+    /// Maximum files to return per discovery run.
+    pub max_files: usize,
+    /// Include archived locations when a tool supports them.
+    pub include_archived: bool,
+}
+
+impl DiscoveryRoots {
+    /// Build discovery roots from the current process environment.
+    #[must_use]
+    pub fn from_env() -> Self {
+        let home = env::var_os("HOME").map(PathBuf::from);
+        let xdg_data_home = env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home.as_ref().map(|home| home.join(".local/share")));
+        let codex_home = env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home.as_ref().map(|home| home.join(".codex")));
+
+        Self {
+            cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            home,
+            xdg_data_home,
+            codex_home,
+            max_files: 128,
+            include_archived: false,
+        }
+    }
+}
+
+/// A discovered session path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredSession {
+    /// Source tool.
+    pub tool: String,
+    /// Session path.
+    pub path: PathBuf,
+}
+
+/// Discover default session files for a supported tool.
+///
+/// # Errors
+/// Returns `MemoryError` if a configured discovery root cannot be read.
+pub fn discover_sessions(
+    tool: &str,
+    roots: &DiscoveryRoots,
+) -> Result<Vec<DiscoveredSession>, MemoryError> {
+    let importer = importer_for(tool).ok_or_else(|| MemoryError::InvalidPath(tool.to_string()))?;
+    let canonical_tool = canonical_tool_name(tool)
+        .ok_or_else(|| MemoryError::InvalidPath(tool.to_string()))?
+        .to_string();
+    importer.discover(roots).map(|paths| {
+        paths
+            .into_iter()
+            .map(|path| DiscoveredSession {
+                tool: canonical_tool.clone(),
+                path,
+            })
+            .collect()
+    })
 }
 
 /// Return an importer for the given tool name, or `None` if unsupported.
 #[must_use]
 pub fn importer_for(tool: &str) -> Option<Box<dyn SessionImporter>> {
-    match tool.to_lowercase().as_str() {
+    match canonical_tool_name(tool)? {
         "aider" => Some(Box::new(AiderImporter)),
-        "claude-code" | "claude_code" | "claude" => Some(Box::new(ClaudeCodeImporter)),
+        "claude-code" => Some(Box::new(ClaudeCodeImporter)),
         "codex" => Some(Box::new(CodexImporter)),
-        "opencode" | "open_code" => Some(Box::new(OpenCodeImporter)),
+        "opencode" => Some(Box::new(OpenCodeImporter)),
+        _ => None,
+    }
+}
+
+fn canonical_tool_name(tool: &str) -> Option<&'static str> {
+    match tool.to_lowercase().as_str() {
+        "aider" => Some("aider"),
+        "claude-code" | "claude_code" | "claude" => Some("claude-code"),
+        "codex" => Some("codex"),
+        "opencode" | "open_code" => Some("opencode"),
         _ => None,
     }
 }
@@ -45,6 +136,11 @@ pub fn importer_for(tool: &str) -> Option<Box<dyn SessionImporter>> {
 pub struct AiderImporter;
 
 impl SessionImporter for AiderImporter {
+    fn discover(&self, roots: &DiscoveryRoots) -> Result<Vec<PathBuf>, MemoryError> {
+        let path = roots.cwd.join(".aider.chat.history.md");
+        Ok(path.exists().then_some(path).into_iter().collect())
+    }
+
     fn import(&self, path: &str) -> Result<Vec<MemoryEntry>, MemoryError> {
         let content = fs::read_to_string(path)?;
         let session_id = session_id_from_path(path);
@@ -120,22 +216,37 @@ struct ClaudeConversation {
 pub struct ClaudeCodeImporter;
 
 impl SessionImporter for ClaudeCodeImporter {
+    fn discover(&self, roots: &DiscoveryRoots) -> Result<Vec<PathBuf>, MemoryError> {
+        let Some(home) = &roots.home else {
+            return Ok(Vec::new());
+        };
+        let projects = home.join(".claude/projects");
+        discover_files(&[projects], roots.max_files, |path| {
+            path.extension().is_some_and(|ext| ext == "jsonl")
+                && path.file_name().is_some_and(|name| name != "history.jsonl")
+        })
+    }
+
     fn import(&self, path: &str) -> Result<Vec<MemoryEntry>, MemoryError> {
         let content = fs::read_to_string(path)?;
-        let conversation: ClaudeConversation = serde_json::from_str(&content)?;
         let session_id = session_id_from_path(path);
 
-        let mut entries = Vec::new();
-        for msg in conversation.messages {
-            let body = msg
-                .content
-                .into_iter()
-                .filter_map(|c| if c.kind == "text" { c.text } else { None })
-                .collect::<Vec<_>>()
-                .join("\n");
+        if content.trim_start().starts_with('{') {
+            if let Ok(conversation) = serde_json::from_str::<ClaudeConversation>(&content) {
+                return Ok(claude_conversation_entries(conversation, &session_id));
+            }
+        }
 
-            if !body.trim().is_empty() {
-                entries.push(build_entry(&session_id, "claude-code", &msg.role, &body));
+        let mut entries = Vec::new();
+        for line in content.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: serde_json::Value = serde_json::from_str(line)?;
+            if let Some((role, body)) = claude_message_from_value(&value) {
+                if !body.trim().is_empty() {
+                    entries.push(build_entry(&session_id, "claude-code", &role, &body));
+                }
             }
         }
 
@@ -156,6 +267,24 @@ struct CodexLine {
 pub struct CodexImporter;
 
 impl SessionImporter for CodexImporter {
+    fn discover(&self, roots: &DiscoveryRoots) -> Result<Vec<PathBuf>, MemoryError> {
+        let Some(codex_home) = &roots.codex_home else {
+            return Ok(Vec::new());
+        };
+        let mut roots_to_scan = vec![codex_home.join("sessions")];
+        if roots.include_archived {
+            roots_to_scan.push(codex_home.join("archived_sessions"));
+        }
+
+        discover_files(&roots_to_scan, roots.max_files, |path| {
+            path.extension().is_some_and(|ext| ext == "jsonl")
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("rollout-") || name.ends_with(".jsonl"))
+        })
+    }
+
     fn import(&self, path: &str) -> Result<Vec<MemoryEntry>, MemoryError> {
         let file = fs::File::open(path)?;
         let reader = BufReader::new(file);
@@ -167,14 +296,11 @@ impl SessionImporter for CodexImporter {
             if line.trim().is_empty() {
                 continue;
             }
-            let record: CodexLine = serde_json::from_str(&line)?;
-            if !record.content.trim().is_empty() {
-                entries.push(build_entry(
-                    &session_id,
-                    "codex",
-                    &record.role,
-                    &record.content,
-                ));
+            let value: serde_json::Value = serde_json::from_str(&line)?;
+            if let Some((role, content)) = codex_message_from_value(&value) {
+                if !content.trim().is_empty() {
+                    entries.push(build_entry(&session_id, "codex", &role, &content));
+                }
             }
         }
 
@@ -195,13 +321,41 @@ struct OpenCodeMessage {
 pub struct OpenCodeImporter;
 
 impl SessionImporter for OpenCodeImporter {
+    fn discover(&self, roots: &DiscoveryRoots) -> Result<Vec<PathBuf>, MemoryError> {
+        let Some(xdg_data_home) = &roots.xdg_data_home else {
+            return Ok(Vec::new());
+        };
+        let opencode = xdg_data_home.join("opencode");
+        let db = opencode.join("opencode.db");
+        let mut found = db.exists().then_some(db).into_iter().collect::<Vec<_>>();
+        let remaining = roots.max_files.saturating_sub(found.len());
+        if remaining > 0 {
+            found.extend(discover_files(
+                &[opencode.join("storage")],
+                remaining,
+                |path| {
+                    path.extension().is_some_and(|ext| ext == "json")
+                        || path.extension().is_some_and(|ext| ext == "jsonl")
+                },
+            )?);
+        }
+        Ok(found)
+    }
+
     fn import(&self, path: &str) -> Result<Vec<MemoryEntry>, MemoryError> {
+        if Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "opencode.db")
+        {
+            return import_opencode_db(path);
+        }
+
         let content = fs::read_to_string(path)?;
-        let messages: Vec<OpenCodeMessage> = serde_json::from_str(&content)?;
         let session_id = session_id_from_path(path);
 
         let mut entries = Vec::new();
-        for msg in messages {
+        for msg in opencode_messages_from_json(&content)? {
             if !msg.content.trim().is_empty() {
                 entries.push(build_entry(
                     &session_id,
@@ -229,18 +383,22 @@ fn session_id_from_path(path: &str) -> String {
 }
 
 fn build_entry(session_id: &str, tool: &str, role: &str, body: &str) -> MemoryEntry {
-    let entry_id = format!("{}-{}-{}", tool, session_id, uuid::Uuid::new_v4());
     let trimmed = body.trim();
+    let evidence_hash = stable_hash(&format!("{tool}\n{session_id}\n{role}\n{trimmed}"));
+    let entry_id = format!("session-{tool}-{session_id}-{}", &evidence_hash[..16]);
     MemoryEntry {
         schema_version: 1,
         entry_id,
-        kind: "session_import".to_string(),
+        kind: "experience".to_string(),
         body: format!("[{}]\n{}", role, trimmed),
-        source_evidence: Vec::new(),
-        confidence: "proposed".to_string(),
+        source_evidence: vec![SourceEvidence {
+            kind: "file_hash".to_string(),
+            ref_: format!("session:{tool}:{session_id}:sha256:{evidence_hash}"),
+        }],
+        confidence: "provisional".to_string(),
         promotion_score: None,
         promotion_breakdown: None,
-        scope: "project".to_string(),
+        scope: "private".to_string(),
         safe_to_send: false,
         created_at: Utc::now().to_rfc3339(),
         last_verified_at: None,
@@ -253,10 +411,224 @@ fn build_entry(session_id: &str, tool: &str, role: &str, body: &str) -> MemoryEn
     }
 }
 
+fn stable_hash(value: &str) -> String {
+    let digest = blake3::hash(value.as_bytes());
+    digest.to_hex().to_string()
+}
+
+fn discover_files<F>(
+    roots: &[PathBuf],
+    max_files: usize,
+    mut include: F,
+) -> Result<Vec<PathBuf>, MemoryError>
+where
+    F: FnMut(&Path) -> bool,
+{
+    let mut found = Vec::new();
+    let mut stack = roots
+        .iter()
+        .filter(|root| root.exists())
+        .cloned()
+        .collect::<Vec<_>>();
+    stack.sort();
+
+    while let Some(path) = stack.pop() {
+        if found.len() >= max_files {
+            break;
+        }
+
+        if path.is_file() {
+            if include(&path) {
+                found.push(path);
+            }
+            continue;
+        }
+
+        if path.is_dir() {
+            let mut entries = fs::read_dir(&path)?
+                .map(|entry| entry.map(|entry| entry.path()))
+                .collect::<Result<Vec<_>, _>>()?;
+            entries.sort();
+            for entry in entries.into_iter().rev() {
+                stack.push(entry);
+            }
+        }
+    }
+
+    found.sort();
+    found.truncate(max_files);
+    Ok(found)
+}
+
+fn claude_conversation_entries(
+    conversation: ClaudeConversation,
+    session_id: &str,
+) -> Vec<MemoryEntry> {
+    let mut entries = Vec::new();
+    for msg in conversation.messages {
+        let body = msg
+            .content
+            .into_iter()
+            .filter_map(|c| if c.kind == "text" { c.text } else { None })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if !body.trim().is_empty() {
+            entries.push(build_entry(session_id, "claude-code", &msg.role, &body));
+        }
+    }
+    entries
+}
+
+fn claude_message_from_value(value: &serde_json::Value) -> Option<(String, String)> {
+    let message = value.get("message").unwrap_or(value);
+    let role = message.get("role")?.as_str()?.to_string();
+    let body = value_text(message.get("content")?)?;
+    Some((role, body))
+}
+
+fn codex_message_from_value(value: &serde_json::Value) -> Option<(String, String)> {
+    if let Ok(line) = serde_json::from_value::<CodexLine>(value.clone()) {
+        return Some((line.role, line.content));
+    }
+
+    let payload = value
+        .get("payload")
+        .or_else(|| value.get("item"))
+        .unwrap_or(value);
+    let message_type = payload.get("type").and_then(|value| value.as_str());
+    if !matches!(
+        message_type,
+        Some("message") | Some("input_text") | Some("output_text")
+    ) {
+        return None;
+    }
+
+    let role = payload
+        .get("role")
+        .and_then(|value| value.as_str())
+        .unwrap_or_else(|| {
+            if message_type == Some("input_text") {
+                "user"
+            } else {
+                "assistant"
+            }
+        })
+        .to_string();
+    let body = value_text(payload.get("content").or_else(|| payload.get("text"))?)?;
+    Some((role, body))
+}
+
+fn value_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Array(items) => {
+            let parts = items
+                .iter()
+                .filter_map(|item| {
+                    if let Some(text) = item.as_str() {
+                        return Some(text.to_string());
+                    }
+                    for key in ["text", "input_text", "output_text"] {
+                        if let Some(text) = item.get(key).and_then(|value| value.as_str()) {
+                            return Some(text.to_string());
+                        }
+                    }
+                    None
+                })
+                .collect::<Vec<_>>();
+            (!parts.is_empty()).then(|| parts.join("\n"))
+        }
+        serde_json::Value::Object(_) => ["text", "input_text", "output_text"]
+            .iter()
+            .find_map(|key| value.get(key).and_then(|value| value.as_str()))
+            .map(ToString::to_string),
+        _ => None,
+    }
+}
+
+fn opencode_messages_from_json(content: &str) -> Result<Vec<OpenCodeMessage>, MemoryError> {
+    if let Ok(messages) = serde_json::from_str::<Vec<OpenCodeMessage>>(content) {
+        return Ok(messages);
+    }
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
+        if let Some(messages) = value.get("messages").and_then(|value| value.as_array()) {
+            return Ok(messages
+                .iter()
+                .filter_map(opencode_message_from_value)
+                .collect());
+        }
+    }
+
+    let mut messages = Vec::new();
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = serde_json::from_str(line)?;
+        if let Some(message) = opencode_message_from_value(&value) {
+            messages.push(message);
+        }
+    }
+    Ok(messages)
+}
+
+fn opencode_message_from_value(value: &serde_json::Value) -> Option<OpenCodeMessage> {
+    let role = value.get("role")?.as_str()?.to_string();
+    let content = value_text(value.get("content").or_else(|| value.get("text"))?)?;
+    Some(OpenCodeMessage { role, content })
+}
+
+fn import_opencode_db(path: &str) -> Result<Vec<MemoryEntry>, MemoryError> {
+    let conn =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let session_id = session_id_from_path(path);
+    let mut entries = Vec::new();
+
+    let queries = [
+        "SELECT message.role, part.text FROM message JOIN part ON part.message_id = message.id WHERE part.text IS NOT NULL ORDER BY message.id, part.id",
+        "SELECT messages.role, parts.text FROM messages JOIN parts ON parts.message_id = messages.id WHERE parts.text IS NOT NULL ORDER BY messages.id, parts.id",
+    ];
+
+    for query in queries {
+        let mut statement = match conn.prepare(query) {
+            Ok(statement) => statement,
+            Err(_) => continue,
+        };
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (role, body) = row?;
+            if !body.trim().is_empty() {
+                entries.push(build_entry(&session_id, "opencode", &role, &body));
+            }
+        }
+        return Ok(entries);
+    }
+
+    Err(MemoryError::InvalidPath(
+        "unsupported opencode.db schema".to_string(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+
+    fn assert_schema_valid(entry: &MemoryEntry) {
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../../../schemas/MemoryEntry.schema.json")).unwrap();
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        let value = serde_json::to_value(entry).unwrap();
+        let errors = validator
+            .iter_errors(&value)
+            .map(|error| error.to_string())
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "memory entry schema errors: {errors:#?}");
+    }
 
     fn make_temp_file(name: &str, contents: &str) -> (tempfile::TempDir, String) {
         let dir = tempfile::tempdir().unwrap();
@@ -273,9 +645,12 @@ mod tests {
         let importer = AiderImporter;
         let entries = importer.import(&path).unwrap();
         assert_eq!(entries.len(), 3);
-        assert_eq!(entries[0].kind, "session_import");
-        assert_eq!(entries[0].confidence, "proposed");
-        assert_eq!(entries[0].scope, "project");
+        assert_schema_valid(&entries[0]);
+        assert_eq!(entries[0].kind, "experience");
+        assert_eq!(entries[0].confidence, "provisional");
+        assert_eq!(entries[0].scope, "private");
+        assert!(!entries[0].safe_to_send);
+        assert_eq!(entries[0].source_evidence.len(), 1);
         assert!(entries[0].body.contains("[user]"));
         assert!(entries[0]
             .body
@@ -297,7 +672,8 @@ mod tests {
         let importer = ClaudeCodeImporter;
         let entries = importer.import(&path).unwrap();
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].kind, "session_import");
+        assert_schema_valid(&entries[0]);
+        assert_eq!(entries[0].kind, "experience");
         assert!(entries[0].body.contains("[user]"));
         assert!(entries[0].body.contains("Add a login feature"));
         assert!(entries[1].body.contains("[assistant]"));
@@ -308,13 +684,28 @@ mod tests {
     }
 
     #[test]
+    fn test_claude_code_native_jsonl_import() {
+        let jsonl = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Explain the router"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"The router lives in src/router.rs."}]}}
+"#;
+        let (_dir, path) = make_temp_file("session.jsonl", jsonl);
+        let importer = ClaudeCodeImporter;
+        let entries = importer.import(&path).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_schema_valid(&entries[0]);
+        assert!(entries[0].body.contains("Explain the router"));
+        assert!(entries[1].body.contains("src/router.rs"));
+    }
+
+    #[test]
     fn test_codex_import() {
         let jsonl = "{\"role\":\"user\",\"content\":\"Write a test for the parser\"}\n{\"role\":\"assistant\",\"content\":\"Here's a unit test.\"}\n";
         let (_dir, path) = make_temp_file("session.jsonl", jsonl);
         let importer = CodexImporter;
         let entries = importer.import(&path).unwrap();
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].kind, "session_import");
+        assert_schema_valid(&entries[0]);
+        assert_eq!(entries[0].kind, "experience");
         assert!(entries[0].body.contains("[user]"));
         assert!(entries[0].body.contains("Write a test for the parser"));
         assert!(entries[1].body.contains("[assistant]"));
@@ -325,13 +716,28 @@ mod tests {
     }
 
     #[test]
+    fn test_codex_native_rollout_jsonl_import() {
+        let jsonl = r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Find the failing test"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The failing test is parser_roundtrip."}]}}
+"#;
+        let (_dir, path) = make_temp_file("rollout-2026-05-20.jsonl", jsonl);
+        let importer = CodexImporter;
+        let entries = importer.import(&path).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_schema_valid(&entries[0]);
+        assert!(entries[0].body.contains("Find the failing test"));
+        assert!(entries[1].body.contains("parser_roundtrip"));
+    }
+
+    #[test]
     fn test_opencode_import() {
         let json = r#"[{"role":"user","content":"Fix the memory leak"},{"role":"assistant","content":"Use Arc instead of Rc."}]"#;
         let (_dir, path) = make_temp_file("log.json", json);
         let importer = OpenCodeImporter;
         let entries = importer.import(&path).unwrap();
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].kind, "session_import");
+        assert_schema_valid(&entries[0]);
+        assert_eq!(entries[0].kind, "experience");
         assert!(entries[0].body.contains("[user]"));
         assert!(entries[0].body.contains("Fix the memory leak"));
         assert!(entries[1].body.contains("[assistant]"));
@@ -339,6 +745,80 @@ mod tests {
         assert_eq!(entries[0].retrieval_tags, vec!["opencode"]);
         let im = entries[0].imported_from.as_ref().unwrap();
         assert_eq!(im.tool, "opencode");
+    }
+
+    #[test]
+    fn test_opencode_db_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute("CREATE TABLE message (id TEXT PRIMARY KEY, role TEXT)", [])
+            .unwrap();
+        conn.execute(
+            "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, text TEXT)",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO message (id, role) VALUES ('m1', 'user')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO part (id, message_id, text) VALUES ('p1', 'm1', 'Open the native DB')",
+            [],
+        )
+        .unwrap();
+
+        let importer = OpenCodeImporter;
+        let entries = importer.import(&path.to_string_lossy()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_schema_valid(&entries[0]);
+        assert!(entries[0].body.contains("Open the native DB"));
+    }
+
+    #[test]
+    fn test_default_session_discovery_uses_synthetic_roots() {
+        let cwd = tempfile::tempdir().unwrap();
+        fs::write(cwd.path().join(".aider.chat.history.md"), "## USER\nhello").unwrap();
+
+        let home = tempfile::tempdir().unwrap();
+        let claude_project = home.path().join(".claude/projects/project-a");
+        fs::create_dir_all(&claude_project).unwrap();
+        fs::write(claude_project.join("session.jsonl"), "{}").unwrap();
+        fs::write(claude_project.join("history.jsonl"), "{}").unwrap();
+
+        let codex_home = tempfile::tempdir().unwrap();
+        let codex_day = codex_home.path().join("sessions/2026/05/20");
+        fs::create_dir_all(&codex_day).unwrap();
+        fs::write(codex_day.join("rollout-synthetic.jsonl"), "{}").unwrap();
+
+        let xdg = tempfile::tempdir().unwrap();
+        let opencode_dir = xdg.path().join("opencode");
+        fs::create_dir_all(&opencode_dir).unwrap();
+        fs::write(opencode_dir.join("opencode.db"), "").unwrap();
+
+        let roots = DiscoveryRoots {
+            cwd: cwd.path().to_path_buf(),
+            home: Some(home.path().to_path_buf()),
+            xdg_data_home: Some(xdg.path().to_path_buf()),
+            codex_home: Some(codex_home.path().to_path_buf()),
+            max_files: 16,
+            include_archived: false,
+        };
+
+        let aider = discover_sessions("aider", &roots).unwrap();
+        assert_eq!(aider.len(), 1);
+        assert!(aider[0].path.ends_with(".aider.chat.history.md"));
+
+        let claude = discover_sessions("claude-code", &roots).unwrap();
+        assert_eq!(claude.len(), 1);
+        assert!(claude[0].path.ends_with("session.jsonl"));
+
+        let codex = discover_sessions("codex", &roots).unwrap();
+        assert_eq!(codex.len(), 1);
+        assert!(codex[0].path.ends_with("rollout-synthetic.jsonl"));
+
+        let opencode = discover_sessions("opencode", &roots).unwrap();
+        assert_eq!(opencode.len(), 1);
+        assert!(opencode[0].path.ends_with("opencode.db"));
     }
 
     #[test]

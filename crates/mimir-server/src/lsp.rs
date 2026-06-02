@@ -5,6 +5,7 @@
 //! - Custom commands via `workspace/executeCommand`
 
 use std::borrow::Cow;
+use std::path::PathBuf;
 
 use tower_lsp::jsonrpc::{Error as RpcError, ErrorCode as RpcErrorCode, Result as RpcResult};
 use tower_lsp::lsp_types::*;
@@ -46,8 +47,10 @@ impl MimirLspBackend {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for MimirLspBackend {
-    async fn initialize(&self, _: InitializeParams) -> RpcResult<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> RpcResult<InitializeResult> {
         info!("LSP initialize");
+        self.inner
+            .set_workspace_root(workspace_root_from_initialize(&params));
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 execute_command_provider: Some(ExecuteCommandOptions {
@@ -172,4 +175,18 @@ impl LanguageServer for MimirLspBackend {
             }
         }
     }
+}
+
+fn workspace_root_from_initialize(params: &InitializeParams) -> Option<PathBuf> {
+    params
+        .workspace_folders
+        .as_ref()
+        .and_then(|folders| folders.first())
+        .and_then(|folder| folder.uri.to_file_path().ok())
+        .or_else(|| {
+            params
+                .root_uri
+                .as_ref()
+                .and_then(|uri| uri.to_file_path().ok())
+        })
 }

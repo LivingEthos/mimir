@@ -180,20 +180,23 @@ pub fn clear_published<P: AsRef<Path>>(project_rules_path: P) -> Result<bool, Me
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mimir_schemas::MemoryEntry;
+    use mimir_schemas::{MemoryEntry, SourceEvidence};
     use tempfile::TempDir;
 
     fn make_entry(id: &str, body: &str) -> MemoryEntry {
         MemoryEntry {
             schema_version: 1,
             entry_id: id.to_string(),
-            kind: "lesson".to_string(),
+            kind: "experience".to_string(),
             body: body.to_string(),
-            source_evidence: vec![],
-            confidence: "verified".to_string(),
+            source_evidence: vec![SourceEvidence {
+                kind: "run".to_string(),
+                ref_: "run-123".to_string(),
+            }],
+            confidence: "validated".to_string(),
             promotion_score: Some(0.85),
             promotion_breakdown: None,
-            scope: "project".to_string(),
+            scope: "repo_shared".to_string(),
             safe_to_send: true,
             created_at: "2024-01-01T00:00:00Z".to_string(),
             last_verified_at: None,
@@ -214,7 +217,7 @@ mod tests {
         assert!(content.contains(START_MARKER));
         assert!(content.contains(END_MARKER));
         assert!(content.contains("Use anyhow for errors"));
-        assert!(content.contains("verified"));
+        assert!(content.contains("validated"));
     }
 
     #[test]
