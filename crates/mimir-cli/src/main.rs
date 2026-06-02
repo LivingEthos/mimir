@@ -365,6 +365,9 @@ enum ContextCmd {
     Inspect {
         /// Packet file path.
         path: String,
+        /// Output JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
     },
     /// Show token budget.
     Budget,
@@ -4592,13 +4595,79 @@ fn main() -> Result<()> {
                 println!("Packet path: {}", run_dir.context_packet_path());
                 println!("Estimated input tokens: {}", packet.estimated_input_tokens);
             }
-            ContextCmd::Inspect { path } => {
+            ContextCmd::Inspect { path, json } => {
                 let data = std::fs::read_to_string(&path)?;
                 let packet: mimir_schemas::ContextPacket = serde_json::from_str(&data)?;
-                println!(
-                    "Packet {}: {} tokens, hash {}",
-                    packet.packet_id, packet.estimated_input_tokens, packet.packet_hash
-                );
+                let format_ranges = |ranges: &[mimir_schemas::ContextRange]| -> String {
+                    if ranges.is_empty() {
+                        "whole file".to_string()
+                    } else {
+                        ranges
+                            .iter()
+                            .map(|range| format!("{}-{}", range.start, range.end))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }
+                };
+                if json {
+                    let included = packet
+                        .included
+                        .iter()
+                        .map(|item| {
+                            serde_json::json!({
+                                "path": item.path,
+                                "ranges": item.ranges,
+                                "reason_code": item.reason_code,
+                                "tokens": item.tokens,
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    let omitted = packet
+                        .omitted_candidates
+                        .iter()
+                        .map(|item| {
+                            serde_json::json!({
+                                "path": item.path,
+                                "ranges": item.ranges,
+                                "reason_for_omission": item.reason_for_omission,
+                                "estimated_tokens": item.estimated_tokens,
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    let view = serde_json::json!({
+                        "packet_id": packet.packet_id,
+                        "estimated_input_tokens": packet.estimated_input_tokens,
+                        "packet_hash": packet.packet_hash,
+                        "included": included,
+                        "omitted": omitted,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&view)?);
+                } else {
+                    println!(
+                        "Packet {}: {} tokens, hash {}",
+                        packet.packet_id, packet.estimated_input_tokens, packet.packet_hash
+                    );
+                    println!("Included ({}):", packet.included.len());
+                    for item in &packet.included {
+                        println!(
+                            "  {} [{}] reason: {} ({} tokens)",
+                            item.path,
+                            format_ranges(&item.ranges),
+                            item.reason_code,
+                            item.tokens
+                        );
+                    }
+                    println!("Omitted ({}):", packet.omitted_candidates.len());
+                    for item in &packet.omitted_candidates {
+                        println!(
+                            "  {} [{}] reason: {} ({} tokens)",
+                            item.path,
+                            format_ranges(&item.ranges),
+                            item.reason_for_omission,
+                            item.estimated_tokens
+                        );
+                    }
+                }
             }
             ContextCmd::Budget => {
                 println!("Token budget: 64000 cap, 4096 output reserve, 512 drift reserve");
