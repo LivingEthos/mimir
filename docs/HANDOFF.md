@@ -7,6 +7,50 @@
 **Tests:** full `./scripts/validate-production.sh` passing locally after eval and packaging-guard updates
 **Commits:** current branch has Phase 7 cleanup commits plus this uncommitted hardening bucket
 
+## v1.0 Exit-Gate Slices - 2026-06-02
+
+Branch `phase7/v1-exit-gates` (off `phase6/memory-server-tui`). Four exit-gate
+workstreams landed; all changes are test/doc/bench, no runtime behavior change.
+
+- **Perf-bench harness.** Five criterion benches now exist with real `[[bench]]`
+  `harness = false` entries: `packet_build` (mimir-context), `repo_index`
+  (mimir-index), `token_count` (mimir-providers), `init_and_doctor`
+  (mimir-session), `render_frame` (mimir-tui). `bench/baselines.json` now carries
+  measured criterion medians (no longer hand-written), and `docs/perf.md` maps
+  each metric to its bench id with directly-measured vs representative-corpus
+  caveats. Two guards: deterministic `crates/mimir-core/tests/perf_regression.rs`
+  (CI-safe, asserts every baseline <= target without timing) and the slow
+  `scripts/check-perf-regression.sh` (real benches, 20% regression gate). Closes
+  the perf-bench gap flagged in the 2026-06-01 note.
+- **Security / compliance test gates.** Cap-compliance gate
+  `crates/mimir-eval/tests/cap_compliance.rs` runs the 15-case
+  `context-recall-v1` fixture across modes 0,2,3,4,5 and asserts every packet
+  stays at or below the 64000-token cap. The redactor `PATTERNS` array is **19**
+  (stale docs said 18, now corrected everywhere); `test_redactor_corpus_covers_every_pattern`
+  keeps the corpus 1:1 with the array. Outbound-redaction tests
+  (`crates/mimir-cli/tests/outbound_redaction.rs`) assert
+  `provider_request.redacted.json` carries `<REDACTED:...>` markers, never the
+  planted secret. A dependency-free Rust gateway-boundary test
+  (`crates/mimir-providers/tests/gateway_boundary.rs`) asserts only
+  `mimir-providers` imports an HTTP client; `scripts/check-gateway-boundary.sh`
+  is wired into `.github/workflows/ci.yml`. Risk regressions: R-01 recall-guard,
+  R-02 token-drift (`token_drift_calibration.rs`), R-14 memory-pollution
+  (`safe_to_send=false`).
+- **User-journey DOD tests + context inspect enhancement.** New end-to-end
+  journey tests `journey_ask_code.rs` (ask/code against an in-process mock
+  provider) and `journey_init_doctor.rs` (provider-free init/doctor scaffold).
+  `mimir context inspect` now emits included items with line ranges and omitted
+  candidates with their `reason_for_omission`, in both text and `--json`
+  (`crates/mimir-cli/tests/context_inspect.rs`).
+- **Docs completeness.** Three new ADRs landed — ADR-006 (fail-closed editing),
+  ADR-007 (override auto-grant after repeated failures), ADR-008 (secret
+  redaction) — bringing the named-topic set to five (003 gateway boundary, 002
+  schema-as-contract, 006, 007, 008). `CHANGELOG.md` Unreleased section is
+  current, and `docs/{cli-exit-codes,providers,security,perf}.md` are all present
+  and grounded in current code (exit codes 0/1/2 only, with the 3–16/64/70/…
+  scheme marked reserved/planned). The `V1.0-ROADMAP.md` exit gate "5 ADRs,
+  CHANGELOG, docs complete" is now ticked.
+
 ## Override Audit, Prompt-Injection, and Security Slices - 2026-06-01
 
 Branch `phase7/override-audit-and-injection` (off `phase6/memory-server-tui`).
