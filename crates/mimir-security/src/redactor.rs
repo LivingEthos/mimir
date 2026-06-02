@@ -365,6 +365,178 @@ mod tests {
         assert_eq!(value["credential_detected"], true);
     }
 
+    /// A single corpus entry: which `PATTERNS` name it exercises, the
+    /// synthetic (fake) secret sample, and the redaction sentinel we expect
+    /// to see after `redact_secrets` runs.
+    struct CorpusEntry {
+        /// Must match a `name` in [`PATTERNS`].
+        pattern_name: &'static str,
+        /// Synthetic, clearly-fake secret value that matches that pattern.
+        sample: &'static str,
+        /// The `<REDACTED:...>` sentinel the redactor should emit.
+        sentinel: &'static str,
+    }
+
+    /// One synthetic sample per pattern in [`PATTERNS`]. All values are fake.
+    ///
+    /// Keep this table 1:1 with `PATTERNS`: the corpus test fails if any
+    /// pattern lacks an entry (or an entry references an unknown pattern), so
+    /// a newly-added pattern without coverage is easy to spot.
+    const CORPUS: &[CorpusEntry] = &[
+        CorpusEntry {
+            pattern_name: "AWS_KEY",
+            sample: "AKIAIOSFODNN7EXAMPLE",
+            sentinel: "<REDACTED:AWS_KEY>",
+        },
+        CorpusEntry {
+            pattern_name: "GCP_KEY",
+            sample: "AIzaSyB-FAKE1234567890abcdefghijklmnopqrs",
+            sentinel: "<REDACTED:GCP_KEY>",
+        },
+        CorpusEntry {
+            pattern_name: "AZURE_SAS",
+            sample: "sig=FAKEazuresignature0123abcXYZ",
+            sentinel: "<REDACTED:AZURE_SAS>",
+        },
+        CorpusEntry {
+            pattern_name: "ANTHROPIC_KEY",
+            sample: "sk-ant-api03-FAKE-anthropic-key-0123456789",
+            sentinel: "<REDACTED:ANTHROPIC_KEY>",
+        },
+        CorpusEntry {
+            pattern_name: "OPENAI_KEY",
+            sample: "sk-proj-FAKEopenai0123456789abcdef",
+            sentinel: "<REDACTED:OPENAI_KEY>",
+        },
+        CorpusEntry {
+            pattern_name: "STRIPE_KEY",
+            sample: "sk_live_FAKEstripe0123456789abcdEF",
+            sentinel: "<REDACTED:STRIPE_KEY>",
+        },
+        CorpusEntry {
+            pattern_name: "GITHUB_TOKEN",
+            sample: "ghp_FAKEgithubtoken0123456789abcdefghijKLMN",
+            sentinel: "<REDACTED:GITHUB_TOKEN>",
+        },
+        CorpusEntry {
+            pattern_name: "GITHUB_PAT",
+            sample: "github_pat_FAKE0123456789_abcdefghijklmnop",
+            sentinel: "<REDACTED:GITHUB_PAT>",
+        },
+        CorpusEntry {
+            pattern_name: "SLACK_TOKEN",
+            sample: "xoxb-FAKE0123456789slacktoken0123456789",
+            sentinel: "<REDACTED:SLACK_TOKEN>",
+        },
+        CorpusEntry {
+            pattern_name: "BEARER_TOKEN",
+            sample: "Bearer FAKEbearertoken0123456789abcdef",
+            sentinel: "<REDACTED:BEARER_TOKEN>",
+        },
+        CorpusEntry {
+            pattern_name: "JWT",
+            sample: "eyJhbGciOiJIUzI1NiIsFAKE.eyJzdWIiOiIxMjM0NTY3ODkwFAKE",
+            sentinel: "<REDACTED:JWT>",
+        },
+        CorpusEntry {
+            pattern_name: "PRIVATE_KEY",
+            sample: "-----BEGIN RSA PRIVATE KEY-----",
+            sentinel: "<REDACTED:PRIVATE_KEY>",
+        },
+        CorpusEntry {
+            pattern_name: "ENV_KEY",
+            sample: "DATABASE_KEY=FAKEenvkeyvalue123",
+            sentinel: "<REDACTED:ENV_KEY>",
+        },
+        CorpusEntry {
+            pattern_name: "ENV_SECRET",
+            sample: "APP_SECRET=FAKEenvsecretvalue123",
+            sentinel: "<REDACTED:ENV_SECRET>",
+        },
+        CorpusEntry {
+            pattern_name: "ENV_TOKEN",
+            sample: "SESSION_TOKEN=FAKEenvtokenvalue123",
+            sentinel: "<REDACTED:ENV_TOKEN>",
+        },
+        CorpusEntry {
+            pattern_name: "PASSWORD",
+            sample: "password=FAKEpasswordvalue123",
+            sentinel: "<REDACTED:PASSWORD>",
+        },
+        CorpusEntry {
+            pattern_name: "PASSWD",
+            sample: "passwd=FAKEpasswdvalue123",
+            sentinel: "<REDACTED:PASSWD>",
+        },
+        CorpusEntry {
+            pattern_name: "API_KEY",
+            sample: "api_key: FAKEapikeyvalue123",
+            sentinel: "<REDACTED:API_KEY>",
+        },
+        CorpusEntry {
+            pattern_name: "DB_URL",
+            sample: "postgres://dbuser:FAKEdbpassword123@db.example.invalid:5432/app",
+            sentinel: "<REDACTED:DB_URL>",
+        },
+    ];
+
+    /// Data-driven corpus: every pattern in [`PATTERNS`] gets a synthetic
+    /// sample, and the whole blob is redacted in one pass. Asserts (a) no
+    /// original secret value survives, and (b) each pattern category fired.
+    #[test]
+    fn test_redactor_corpus_covers_every_pattern() {
+        // The corpus must stay in lockstep with PATTERNS: same count, and
+        // every entry references a real pattern. A newly-added pattern with
+        // no corpus entry trips this immediately.
+        assert_eq!(
+            CORPUS.len(),
+            PATTERNS.len(),
+            "every PATTERNS entry needs exactly one CORPUS entry"
+        );
+        for entry in CORPUS {
+            assert!(
+                PATTERNS.iter().any(|p| p.name == entry.pattern_name),
+                "corpus references unknown pattern {}",
+                entry.pattern_name
+            );
+        }
+
+        // Build one blob, each sample on its own line so patterns can't
+        // bleed across samples.
+        let blob: String = CORPUS
+            .iter()
+            .map(|e| e.sample)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let redacted = redact_secrets(&blob);
+
+        // (a) None of the synthetic secret values survive verbatim.
+        for entry in CORPUS {
+            assert!(
+                !redacted.contains(entry.sample),
+                "secret for {} survived redaction",
+                entry.pattern_name
+            );
+        }
+
+        // (b) Each pattern category fired (its sentinel is present), and the
+        // total number of sentinels matches the number of patterns.
+        for entry in CORPUS {
+            assert!(
+                redacted.contains(entry.sentinel),
+                "expected {} to fire for {}",
+                entry.sentinel,
+                entry.pattern_name
+            );
+        }
+        let redaction_count = redacted.matches("<REDACTED:").count();
+        assert_eq!(
+            redaction_count,
+            CORPUS.len(),
+            "expected exactly one redaction per pattern, got {redaction_count}",
+        );
+    }
+
     #[test]
     fn test_redact_json_preserves_token_accounting_fields() {
         let mut value = serde_json::json!({

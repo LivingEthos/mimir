@@ -1338,6 +1338,70 @@ mod tests {
     }
 
     #[test]
+    fn recall_guard_flags_indirect_dependency_via_omitted_export() {
+        // R-01 regression: an INCLUDED/needed file imports a symbol whose
+        // definition lives in another file that is OMITTED from the packed
+        // manifest. The recall guard must catch this indirect dependency by
+        // matching the imported symbol against the omitted file's exports
+        // (export_graph), not just by literal path matching.
+        let mut index = RepoIndex::new();
+
+        // Needed file: imports the `validate_token` symbol by name only.
+        // Crucially, the import string does NOT mention the defining file's
+        // path ("src/auth.rs"), so the guard can only connect them through
+        // the export graph of the omitted file.
+        index.add(FileEntry {
+            path: "src/handler.rs".to_string(),
+            language: "rust".to_string(),
+            content_hash: "h".to_string(),
+            token_count: 600,
+            exports: vec!["handle_request".to_string()],
+            imports: vec!["validate_token".to_string()],
+        });
+
+        // Defining file for the imported symbol — this is what gets omitted.
+        index.add(FileEntry {
+            path: "src/auth.rs".to_string(),
+            language: "rust".to_string(),
+            content_hash: "a".to_string(),
+            token_count: 400,
+            exports: vec!["validate_token".to_string()],
+            imports: vec![],
+        });
+
+        let manifest = PackedManifest {
+            included: vec![PackedItem {
+                path: "src/handler.rs".to_string(),
+                ranges: vec![Range { start: 1, end: 60 }],
+                estimated_tokens: 600,
+                score: 1.0,
+                reason_code: "direct".to_string(),
+            }],
+            omitted: vec![OmittedItem {
+                path: "src/auth.rs".to_string(),
+                reason: "lower_relevance_score".to_string(),
+                estimated_tokens: 400,
+                risk: None,
+            }],
+            total_tokens: 600,
+        };
+
+        let flags = stage7_recall_guard(&manifest, &index, &[]);
+
+        // The guard must raise a flag for the omitted indirect dependency.
+        // This assertion fails if the guard misses the symbol-level link.
+        let indirect_flag = flags
+            .iter()
+            .find(|f| {
+                f.category == "import_of_omitted" && f.paths.iter().any(|p| p == "src/auth.rs")
+            })
+            .expect("recall guard must flag the omitted indirect dependency 'src/auth.rs'");
+
+        // The flagging file (the included importer) is also recorded.
+        assert!(indirect_flag.paths.iter().any(|p| p == "src/handler.rs"));
+    }
+
+    #[test]
     fn full_pipeline_runs_without_panic() {
         let index = make_index();
         let config = PipelineConfig::default();
