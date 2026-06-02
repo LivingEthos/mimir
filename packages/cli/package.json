@@ -1,11 +1,19 @@
 {
   "name": "@mimir/cli",
   "version": "1.0.0",
+  "private": true,
   "description": "Mimir CLI — Replayable Context for coding agents",
   "bin": {
-    "mimir": "./bin/mimir"
+    "mimir": "bin/mimir"
   },
+  "files": [
+    "README.md",
+    "bin/mimir",
+    "install.js",
+    "package.json"
+  ],
   "scripts": {
+    "prepack": "node --check ./bin/mimir && node --check ./install.js && node ../../scripts/verify-platform-package.mjs --all --require-platform-binaries",
     "postinstall": "node ./install.js"
   },
   "optionalDependencies": {
@@ -15,10 +23,16 @@
     "@mimir/cli-linux-x64": "1.0.0",
     "@mimir/cli-win32-x64": "1.0.0"
   },
-  "keywords": ["cli", "ai", "context", "llm", "coding"],
+  "keywords": [
+    "cli",
+    "ai",
+    "context",
+    "llm",
+    "coding"
+  ],
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mimir/mimir.git"
+    "url": "git+https://github.com/MisterWonderful/mimir.git"
   }
 }
