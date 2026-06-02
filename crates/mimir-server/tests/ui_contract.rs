@@ -1113,8 +1113,7 @@ async fn trace_artifact_previews_redact_malformed_jsonl_and_oversized_redacted_o
     let raw_prompt = "RAW_PROMPT_SHOULD_NOT_LEAK_OVERSIZED";
     let provider_request_body = "PROVIDER_REQUEST_BODY_SHOULD_NOT_LEAK_OVERSIZED";
     let provider_response_body = "PROVIDER_RESPONSE_BODY_SHOULD_NOT_LEAK_OVERSIZED";
-    let numbers = std::iter::repeat("0")
-        .take(120_000)
+    let numbers = std::iter::repeat_n("0", 120_000)
         .collect::<Vec<_>>()
         .join(",");
     let compact_json = format!(

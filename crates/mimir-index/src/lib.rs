@@ -564,13 +564,13 @@ fn is_known_output_path(components: &[String]) -> bool {
         .first()
         .is_some_and(|component| AMBIGUOUS_OUTPUT_DIR_NAMES.contains(&component.as_str()))
         || components
-            .get(0)
+            .first()
             .is_some_and(|component| component == "apps")
             && components
                 .get(2)
                 .is_some_and(|component| AMBIGUOUS_OUTPUT_DIR_NAMES.contains(&component.as_str()))
         || components
-            .get(0)
+            .first()
             .is_some_and(|component| component == "packages")
             && components
                 .get(2)
