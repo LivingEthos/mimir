@@ -7,6 +7,42 @@
 **Tests:** full `./scripts/validate-production.sh` passing locally after eval and packaging-guard updates
 **Commits:** current branch has Phase 7 cleanup commits plus this uncommitted hardening bucket
 
+## Override Audit, Prompt-Injection, and Security Slices - 2026-06-01
+
+Branch `phase7/override-audit-and-injection` (off `phase6/memory-server-tui`).
+
+- **`override request` now logs grants (DOD met).** Every request appends a
+  redacted `override_requested` audit event to the run's `events.jsonl`
+  (requested cap, reason, requester, threshold, prior failures). The
+  `--auto-grant-after` threshold has real semantics, driven through
+  `mimir-review`'s `OverrideManager`: prior failed attempts are counted from a
+  run's `events.jsonl` (attach with `--run-id`; a fresh run starts at zero), and
+  when the count meets the threshold a new `OverrideGrant` artifact
+  (`override_grant.json`) plus a redacted `override_granted` event are written
+  (`granted_by=auto_after_failures`). Added the `OverrideGrant` schema, example,
+  generated Rust type, and SDK mirror. Auto-grant trigger: `prior_failures >=
+  auto_grant_after` (so `--auto-grant-after 0` grants immediately). Failure event
+  types counted: `cost_cap_aborted`, `repair_cost_cap_preflight_exceeded`,
+  `patch_rejected`, `repair_patch_rejected`, `patch_tests_failed`,
+  `override_attempt_failed`.
+- **Prompt-injection containment test (DOD R-12 met).** New fixture
+  `fixtures/prompt-injection/poisoned-context.md` and
+  `crates/mimir-cli/tests/prompt_injection.rs` drive `mimir code` through the
+  localhost-mock provider with a compromised model that obeys an injected
+  "ignore previous instructions" payload and targets a path outside the
+  `--editable` set, a `../` escape, and an absolute path. All three fail closed:
+  injection reaches the model yet no out-of-set file is mutated and the run exits
+  non-zero.
+- **Two security slices.** `read_shared_packet_bundle` now rejects symlinks /
+  non-regular files and caps on-disk size; `trace export --redact` now scrubs
+  local filesystem paths (via new `mimir_runs::redact_trace_paths`) and refuses
+  to write `--output` through a symlink.
+- **Toolchain note:** clippy 1.95 promoted `get_first` / `manual_repeat_n` to
+  deny-level; cleared three pre-existing lints (mimir-index, mimir-server test)
+  so `cargo clippy --workspace --all-targets -- -D warnings` passes.
+- **Still open (out of scope here):** the perf-bench gap — `bench/baselines.json`
+  is hand-written static numbers with no `[[bench]]`/criterion harness.
+
 ## Agent Entry Point Update - 2026-05-23
 
 - `AGENTS.md` now acts as the short first-read guide for future coding-agent sessions in this repo.
