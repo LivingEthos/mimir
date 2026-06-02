@@ -1,4 +1,4 @@
-//! Secret redaction with 200+ patterns.
+//! Secret redaction across the built-in [`PATTERNS`] set (19 patterns).
 
 use regex::Regex;
 use std::sync::OnceLock;
