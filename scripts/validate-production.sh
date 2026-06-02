@@ -29,6 +29,12 @@ run "$ROOT/scripts/check-gateway-boundary.sh"
 run cargo audit
 run cargo deny check
 
+while IFS= read -r script; do
+    run node --check "$script"
+done < <(find "$ROOT/scripts" -maxdepth 1 -type f -name '*.mjs' | sort)
+
+run node "$ROOT/scripts/verify-platform-package.mjs" --all
+
 if [ -f "$ROOT/packages/sdk/package.json" ]; then
     run npm --prefix "$ROOT/packages/sdk" run generate
     run npm --prefix "$ROOT/packages/sdk" run check:schema-drift

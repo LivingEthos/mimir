@@ -2,10 +2,38 @@
 
 ## Current Status
 
-**Version:** v0.6.0-phase6
+**Version:** v1.0.0 production-readiness hardening in progress
 **Branch:** phase6/memory-server-tui
-**Tests:** 185 passing
-**Commits:** 6 on current branch
+**Tests:** full `./scripts/validate-production.sh` passing locally after eval and packaging-guard updates
+**Commits:** current branch has Phase 7 cleanup commits plus this uncommitted hardening bucket
+
+## Agent Entry Point Update - 2026-05-23
+
+- `AGENTS.md` now acts as the short first-read guide for future coding-agent sessions in this repo.
+- Start work from `/Users/frisson1/Downloads/Mimir-Hermes-Handoff/Mimir`; the parent handoff folder remains useful for historical phase specs, but this repo's current docs and CLI help win when details conflict.
+- Use semantic search or `rg` first for unfamiliar flows, then read the minimum relevant files. Keep edits scoped to the smallest crate, package, script, or doc set.
+- Prefer focused validation while iterating and reserve `./scripts/validate-production.sh` for release handoff or changes that cross multiple workstreams.
+- The large-codebase operating model for Mimir itself is now explicit: context first, scoped edit targets, replayable evidence, subagent-assisted exploration when useful, and fail-closed validation.
+
+## Agent Workflow Productization - 2026-05-23
+
+- `mimir init` now seeds `.mimir/project-rules.md`, `.mimir/checks/no-provider-secrets.md`, `.mimir/commands/fast-check.md`, and `.mimir/commands/release-check.md` without overwriting existing files.
+- Context packets now include safe repository guidance files with `reason_code=manifest_reference`: `.mimir/project-rules.md`, `AGENTS.md`, and `CLAUDE.md`; documentation-oriented tasks may also include `README.md` and `docs/HANDOFF.md`.
+- `mimir context suggest "<task>"` writes a provider-free starting packet and reports guidance files, likely files, risky omissions, source-controlled check count, and next steps.
+- `mimir check --ci --json` runs `.mimir/checks/*.md` source-controlled checks without provider calls and exits non-zero for blocking findings in CI mode.
+- `mimir explore "<question>" --json` runs read-only search-subagent exploration and persists `.mimir/runs/<run-id>/explore_evidence.json`.
+- `mimir code --recipe <name> --param key=value` validates code-mode `.mimir/commands/*.md` recipes, renders parameters, persists `.mimir/runs/<run-id>/command_recipe.json`, and keeps explicit `--editable` enforcement.
+- New focused coverage lives in `crates/mimir-cli/tests/agent_workflow_cli.rs`; guidance inclusion tests live in `crates/mimir-context/src/builder.rs`.
+
+## Packaging Verification Update - 2026-05-25
+
+- cargo-dist artifacts are present locally under `target/distrib/` for all five configured targets: macOS arm64/x64, Linux arm64/x64, and Windows x64.
+- Installed local release build tools needed to produce the cross-target artifacts from macOS: `zig`, `cargo-zigbuild`, and `cargo-xwin`.
+- Staged all five native binaries with `scripts/stage-npm-platform-package.mjs`; every private Node platform package verification passes, and `node packages/cli/bin/mimir --version` reports `mimir 1.0.0` through the Node wrapper.
+- `npm pack --dry-run --json` passes for the private `@mimir/sdk`, all five private `@mimir/cli-*` platform packages, and private root `@mimir/cli`.
+- Homebrew formula checksums are populated for all macOS/Linux archives; `update-homebrew-checksums.mjs --check` and strict platform verification both pass against `target/distrib/`.
+- `scripts/stage-npm-platform-package.mjs` now rejects missing flag values and unknown arguments instead of falling back to host defaults.
+- npm registry publication is disabled by policy. The canonical GitHub repository is now `MisterWonderful/mimir`; local `origin`, package metadata, Homebrew URLs, and release tooling have been reattached to it. The stale local `v1.0.0` tag that pointed at `136771a` has been deleted so it cannot be pushed accidentally.
 
 ## Completed Phases
 
@@ -47,7 +75,7 @@
 
 ### Phase 5 (v0.6.0-phase5) - Subagents
 - **mimir-subagents**: Subagent registry with cost tiers
-- **mimir-subagents**: Execute stub with evidence collection
+- **mimir-subagents**: Deterministic read-only local evidence execution
 - **mimir-cli**: agent subcommand with --list flag
 - 158 tests passing
 
@@ -67,34 +95,65 @@
 - Only mimir-runs writes under .mimir/runs/
 - Gateway boundary check script passes
 
-## Next Steps (Phase 7)
+## Phase 7 / Production Readiness Status
 
 Per 15-PHASES.md:
 
-1. **Wire server transport** (mimir-server)
-   - Real tower-lsp TCP/stdio transport
-   - LSP initialization handshake
+1. **Wire server transport** (mimir-server) — mostly complete
+   - tower-lsp stdio transport is wired.
+   - TCP transport accepts real framed LSP connections and now accepts multiple clients through a listener loop.
+   - LSP `initialize` records `rootUri` / first `workspaceFolder` and context-building RPCs use it for retrieval-backed packets.
 
-2. **Connect TUI to live data** (mimir-tui)
-   - Load real context packets into panels
-   - Connect to running server for live updates
+2. **Connect TUI to live data** (mimir-tui) — live server refresh now wired
+   - `mimir tui --packet` loads real `ContextPacket` JSON into budget/provider/included/omitted panels.
+   - `mimir tui --pipeline-result` loads real retrieval `PipelineResult` JSON when available.
+   - Included/omitted panels fall back to packet data when no separate pipeline artifact exists.
+   - `mimir tui --server 127.0.0.1:7788 --task "<task>"` connects to a running TCP `mimir serve --port 7788`, fetches a retrieval-backed packet, and refreshes on `r` or `--refresh-ms`.
 
-3. **Implement session importers** (mimir-memory)
-   - Aider conversation import
-   - Claude Code/Codex/OpenCode session import
+3. **Implement session importers** (mimir-memory) — explicit import plus safe discovery complete
+   - Importer implementations exist for Aider markdown, Claude Code JSON/JSONL, Codex JSONL/rollout JSONL, and OpenCode JSON/SQLite DB synthetic native shapes.
+   - `mimir memory import-sessions --from <tool> <path>...` inserts imported entries into `.mimir/memory.db`; `--discover --dry-run` previews default locations without writing.
+   - Imported entries are schema-valid, deterministic, `confidence=provisional`, `scope=private`, and `safe_to_send=false`.
+   - Discovery is bounded by `--max-files`, uses environment roots only (`HOME`, `CODEX_HOME`, `XDG_DATA_HOME`), and does not include provider credentials.
 
-4. **Generate SDK types** (packages/sdk)
-   - TypeScript type generation from schemas
-   - NPM package wrapper
+4. **Generate SDK types** (packages/sdk) — complete with drift checks
+   - TypeScript schema mirrors regenerate with `npm run generate`.
+   - `index.d.ts` is now a real root declaration barrel for `import type { ContextPacket } from "@mimir/sdk"`.
+   - Drift checks validate key wire-shape invariants.
 
-5. **Packaging** (cargo dist)
-   - Cross-platform binary distribution
-   - Homebrew formula
+5. **Packaging** (cargo dist / private Node pack smoke / Homebrew) — local artifacts and strict checks complete
+   - cargo-dist workflow and private Node wrapper exist.
+   - `mimir-cli`, private `@mimir/cli`, private `@mimir/sdk`, private Node platform-package manifests, and Homebrew artifact URL names are aligned to v1.0.0 / cargo-dist `mimir-cli-*` artifacts.
+   - All five native platform packages have staged binaries and pass `npm pack --dry-run`.
+   - Homebrew checksums match the local macOS/Linux cargo-dist archives.
+   - Remaining release work: push from a GitHub account with write access, run CI on the exact release commit, create the `v1.0.0` tag, upload GitHub release assets, and then run Homebrew smoke checks against the live asset URLs.
 
-6. **Tag v0.7.0-phase7**
+6. **Context sharing / packet replay** — portable replay bundles now wired
+   - `mimir packet share <run-id>` writes a redacted `mimir.packet_share` bundle by default, with the schema-valid packet plus the redacted provider request and checksums.
+   - `mimir packet share <run-id> --packet-only` preserves metadata-only packet export for callers that need raw `ContextPacket` JSON.
+   - `mimir packet replay <run-id> --request-json` emits the saved redacted provider request when available, falling back to deterministic reconstruction for build-only packets.
+   - `mimir packet replay shared-packet.json --request-json` works from a fresh directory and emits byte-identical redacted request JSON.
+   - `ask` and `context call` now write `provider_request.redacted.json`; plan/code already did.
+   - Sharing still refuses packet metadata or provider request artifacts containing secret-like text.
+
+7. **Context eval harness** — local context recall dataset now wired
+   - `mimir eval context --dataset fixtures/context-recall-v1.yaml` runs 15 schema-shaped cases across modes 0, 2, 3, 4, and 5 without provider calls.
+   - The command writes schema-valid `EvalResult` arrays under `.mimir/evals/` and prints aggregate recall, precision, cap compliance, and whether mode 4 beats mode 0 on mean file recall.
+   - Current local release-binary smoke reports cap compliance and mode 4 beating mode 0, with partial full-recall case pass counts still visible in the summary.
+
+8. **Tag v1.0.0** — pending GitHub release assets, Homebrew live-URL smoke checks, and green CI on the release commit
+
+9. **Agent workflow productization** — provider-free entry points now wired
+   - `init`, `context suggest`, `check`, and `explore` expose the large-codebase workflow as reusable CLI features.
+   - Context packet guidance discovery is implemented with secret/size fail-closed behavior.
+   - Code-mode `.mimir/commands/*.md` recipe execution is wired for `mimir code --recipe`; ask/validation recipe execution and richer provider-backed exploration remain future work.
 
 ## Key Files
 - `/Users/frisson1/Downloads/Mimir-Hermes-Handoff/Mimir/` - Repo root
+- `AGENTS.md` - first-read guide for coding agents and contributors
+- `README.md` - product overview, workspace map, and public development commands
+- `docs/HANDOFF.md` - current development status, dirty work buckets, validation, and release blockers
+- `docs/agent-workflows.md` - product documentation for init guidance, context suggest, checks, and exploration
 - `crates/mimir-memory/src/store.rs` - SQLite memory store with FTS5
 - `crates/mimir-memory/src/engine.rs` - Memory Decision Engine
 - `crates/mimir-memory/src/publish.rs` - Marker-block publishing
@@ -114,28 +173,38 @@ Per 15-PHASES.md:
 ```bash
 cd /Users/frisson1/Downloads/Mimir-Hermes-Handoff/Mimir
 . "$HOME/.cargo/env"
-cargo test --workspace  # Run all tests (185 passing)
+cargo fmt --all -- --check
+cargo clippy -p <crate-name> --all-targets -- -D warnings
+cargo test -p <crate-name> --all-targets
+cargo test --workspace  # Run workspace tests
 cargo build --release   # Build release binary
 ./target/release/mimir --help
 ./target/release/mimir memory --help
 ./target/release/mimir serve --help
+./target/release/mimir eval context --dataset fixtures/context-recall-v1.yaml
+mimir context suggest "map current task before editing"
+mimir explore "where is this flow handled?"
+mimir check --ci
+./scripts/validate-production.sh  # Full release handoff gate
 ```
 
 ## Open Questions
-- Server transport is stubbed (needs tower-lsp wiring in Phase 7)
-- TUI panels render placeholder data (needs real packet loading in Phase 7)
-- Session importers are stubs (need actual tool integration in Phase 7)
-- No SDK/TS types generated yet (needs schema codegen pipeline in Phase 7)
-- No cargo dist or npm wrapper yet (Phase 7)
+- Homebrew formula SHA256 values are complete for the local macOS/Linux artifacts.
+- Private Node platform packages are scaffolded, staged, and have `prepack` guards.
+- Parent handoff/spec docs still contain older command names in places; `docs/context-packets.md` and the CLI help reflect the current packet lifecycle.
+- Code-mode `.mimir/commands/*.md` recipes are executable through `mimir code --recipe`; seeded ask-mode validation recipes are still documented workflow material until an ask/validation recipe runner is added.
+- `mimir explore` uses deterministic read-only local search evidence; richer provider-backed exploration remains future work.
+- Full production validation passes locally; final release still needs GitHub write access, green CI on the exact release commit, a new correct `v1.0.0` tag, uploaded GitHub release assets, and Homebrew smoke checks against the live asset URLs.
 
 ## Handoff Instructions
 To continue development:
-1. Read this HANDOFF.md
-2. Read the relevant phase spec from Mimir-Hermes-Handoff/*.md
-3. Run `cargo test --workspace` to verify baseline (185 tests)
-4. Create branch `phase7/packaging`
-5. Implement Phase 7 features
-6. Run multi-model review at milestone
+1. Read `AGENTS.md`
+2. Read this HANDOFF.md
+3. Read the relevant phase spec from Mimir-Hermes-Handoff/*.md only when needed
+4. Run a focused crate/package check for the files you plan to touch, or `cargo test --workspace` for a broad baseline
+5. Create branch `phase7/packaging` or a narrower branch matching the current workstream
+6. Implement Phase 7 features
+7. Run multi-model review at milestone
 
 ## Cleanup Note - 2026-05-20
 
@@ -164,6 +233,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --all-targets
 cargo test -p mimir-context -p mimir-providers -p mimir-schemas --doc
 cargo build --release
+./target/release/mimir eval context --dataset fixtures/context-recall-v1.yaml
 ./scripts/check-gateway-boundary.sh
 cargo audit
 cargo deny check

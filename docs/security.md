@@ -15,7 +15,7 @@ Mimir handles source code, API keys, and AI model interactions. The primary thre
 ### Secret Redaction
 - 18 regex patterns cover AWS, GCP, Azure, Anthropic, OpenAI, Stripe, GitHub, Slack, JWT, private keys, env vars, passwords, API keys, DB URLs
 - All outbound provider requests are redacted before logging
-- `mimir packet share` sanitizes packets before export
+- `mimir packet share` writes a redacted portable bundle by default, refuses secret-like packet metadata, and preserves provider credentials as environment-only inputs
 
 ### Prompt Injection Resistance
 - `<FILE>` delimiter discipline in prompts

@@ -24,3 +24,5 @@
 | 77 | Permission denied (OS) | OS-level permission denied |
 | 126 | Command not executable | Binary permissions issue |
 | 127 | Command not found | Required external tool not found |
+
+`mimir check --ci` currently exits with code 1 when source-controlled checks report error or critical findings. Future check-specific exit-code refinement should map blocking check failures to code 11 once the broader review/check policy is unified.

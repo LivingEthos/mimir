@@ -2,12 +2,12 @@
 
 All notable changes to Mimir are documented in this file.
 
-## [v1.0.0] - 2025-05-18
+## [v1.0.0] - 2026-05-22
 
 ### Added
 - `mimir ask` — answer questions with context retrieval
-- `mimir packet share` — sanitize and export packets
-- `mimir packet replay` — reproduce prompts from local artifacts
+- `mimir packet share` — export portable redacted packet replay bundles
+- `mimir packet replay` — verify local packets or shared bundles and emit byte-identical redacted provider requests
 - `mimir override request` — cap override flow with audit logging
 - `mimir trace export --redact` — trace portability
 - Security tests: cap compliance 100%, prompt injection resistance
@@ -15,14 +15,22 @@ All notable changes to Mimir are documented in this file.
 - Documentation: 5 ADRs, CLI exit codes, providers, security, performance
 - cargo-dist packaging for 5 targets
 - TypeScript SDK with 21 generated types
+- Live TUI refresh from a running TCP `mimir-server`
+- Safe session discovery for Aider, Claude Code, Codex, and OpenCode
+- private Node platform package manifests for native CLI binary package smoke tests
+- `mimir eval context --dataset fixtures/context-recall-v1.yaml` for local context recall/cap checks
+- Release checklist and v1.0.0 release notes
 
 ### Changed
 - Server transport: tower-lsp TCP + stdio
-- TUI panels: live data loading via `--packet` and `--pipeline-result`
-- Session importers: Aider, Claude Code, Codex, OpenCode
+- TUI panels: live data loading via `--packet`, `--pipeline-result`, and `--server`
+- Session importers: Aider, Claude Code, Codex, OpenCode with private provisional memory semantics
+- Release metadata aligned around `mimir-cli`, private Node package manifests, and cargo-dist `mimir-cli-*` artifacts
+- `ask` and `context call` now write `provider_request.redacted.json` artifacts for later packet sharing
+- private Node platform packages now fail `prepack` if native binaries have not been staged
 
 ### Fixed
-- All 232 tests passing
+- Full production validation passing
 - cargo audit clean
 - cargo deny passes
 
