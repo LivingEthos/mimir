@@ -1,16 +1,96 @@
 {
   "version": "1.0.0",
   "commit": "v1.0.0",
+  "generated_from": "cargo bench",
+  "generated_commit": "dc3051d",
+  "generated_notes": "All values are criterion MEDIAN point estimates measured by `cargo bench` on the repo at commit dc3051d, converted from nanoseconds to the unit implied by each key (ms or s). Measured on local synthetic in-repo data only; no provider or network calls. See bench-to-metric mapping and corpus caveats in the per-metric *_notes fields and docs/perf.md.",
   "metrics": {
-    "mimir_init_ms": 50,
-    "cold_startup_warm_cache_ms": 150,
-    "cold_startup_no_cache_ms": 1200,
-    "packet_build_small_ms": 300,
-    "repo_index_10k_cold_s": 25,
-    "repo_index_incremental_s": 1.5,
-    "token_count_local_ms": 20,
-    "tui_render_frame_ms": 8,
-    "doctor_command_s": 1.0
+    "mimir_init_ms": 1.415291,
+    "cold_startup_warm_cache_ms": 0.646875,
+    "cold_startup_no_cache_ms": 0.646875,
+    "packet_build_small_ms": 0.646875,
+    "repo_index_10k_cold_s": 0.017807,
+    "repo_index_incremental_s": 0.018404,
+    "token_count_local_ms": 0.006900,
+    "tui_render_frame_ms": 0.461277,
+    "doctor_command_s": 0.000731
+  },
+  "targets": {
+    "mimir_init_ms": 100,
+    "cold_startup_warm_cache_ms": 200,
+    "cold_startup_no_cache_ms": 2000,
+    "packet_build_small_ms": 500,
+    "repo_index_10k_cold_s": 30,
+    "repo_index_incremental_s": 2,
+    "token_count_local_ms": 50,
+    "tui_render_frame_ms": 16,
+    "doctor_command_s": 2
+  },
+  "measurement": {
+    "mimir_init_ms": {
+      "crate": "mimir-session",
+      "bench_id": "session_init/init_project_files",
+      "measured_corpus": "fresh tempdir workspace, init_project_files writes the default project scaffold",
+      "directly_measures_target": true,
+      "notes": "Maps to `mimir init` (<100ms). Median 1415290.65 ns => 1.415291 ms."
+    },
+    "cold_startup_warm_cache_ms": {
+      "crate": "mimir-context",
+      "bench_id": "context_packet_build",
+      "measured_corpus": "in-tempdir synthetic repo (5 small .rs files + AGENTS.md)",
+      "directly_measures_target": false,
+      "notes": "The context_packet_build bench rebuilds the RepoIndex from scratch each iteration (no IndexCache reuse), so it actually measures the NO-cache path. A genuinely warm-cache build can only be faster, so this value is a conservative UPPER BOUND on the warm-cache target. No separate warm-cache bench exists yet. Median 646874.96 ns => 0.646875 ms."
+    },
+    "cold_startup_no_cache_ms": {
+      "crate": "mimir-context",
+      "bench_id": "context_packet_build",
+      "measured_corpus": "in-tempdir synthetic repo (5 small .rs files + AGENTS.md)",
+      "directly_measures_target": false,
+      "notes": "Same context_packet_build bench. It builds the index cold each iteration, so it is the no-cache path. CORPUS CAVEAT: the synthetic repo is only ~6 tiny files, far smaller than a typical task repo, so the absolute figure is an underestimate of a real no-cache cold start; it is recorded as the actual measured value, not extrapolated upward. Median 646874.96 ns => 0.646875 ms."
+    },
+    "packet_build_small_ms": {
+      "crate": "mimir-context",
+      "bench_id": "context_packet_build",
+      "measured_corpus": "in-tempdir synthetic repo (5 small .rs files + AGENTS.md)",
+      "directly_measures_target": true,
+      "notes": "Maps directly to `Packet build, typical small task` (<500ms): the full ContextBuilder::build() path (index + retrieval + seal/hash). Median 646874.96 ns => 0.646875 ms."
+    },
+    "repo_index_10k_cold_s": {
+      "crate": "mimir-index",
+      "bench_id": "repo_index/cold_build_index_600",
+      "measured_corpus_files": 600,
+      "target_corpus_files": 10000,
+      "directly_measures_target": false,
+      "notes": "EXTRAPOLATION REQUIRED. Target is 10k files cold (<30s); the bench measures a representative 600-file synthetic tree (a 10k tree is too slow to materialise and iterate under criterion's default sampling). build_index is roughly linear in file count, so the 10k figure extrapolates to ~0.30s (0.017807 s * 10000/600 ~= 0.297 s), still far under the 30s target. The recorded value is the ACTUAL 600-file median, NOT the extrapolation. Median 17807492.26 ns => 0.017807 s."
+    },
+    "repo_index_incremental_s": {
+      "crate": "mimir-index",
+      "bench_id": "repo_index/incremental_reindex_600",
+      "measured_corpus_files": 600,
+      "directly_measures_target": false,
+      "notes": "mimir-index has no diff-based incremental API; build_index is a whole-repo builder. The incremental bench rewrites a single source file then re-runs build_index with the OS page cache warm (the realistic 'edit one file then reindex' path). Measured on 600 files, not the full target corpus. Median 18403526.25 ns => 0.018404 s. Target <2s."
+    },
+    "token_count_local_ms": {
+      "crate": "mimir-providers",
+      "bench_id": "count_local/102420",
+      "measured_corpus": "synthetic ~100 KB English text (worst-case of 1KB/10KB/100KB inputs)",
+      "directly_measures_target": true,
+      "notes": "Records the largest (100 KB) input as the worst case for `Token count, local` (<50ms). tiktoken-rs caches the BPE internally, so per-call cost is the encode only. Median 6900.25 ns => 0.006900 ms. Smaller inputs: count_local/1035 = 0.000214 ms, count_local/10260 = 0.000816 ms."
+    },
+    "tui_render_frame_ms": {
+      "crate": "mimir-tui",
+      "bench_id": "render_frame_120x40",
+      "measured_corpus": "fully populated App (ContextPacket + PipelineResult + diff + provider counts) rendered to a 120x40 TestBackend buffer",
+      "directly_measures_target": true,
+      "notes": "Maps to `TUI render frame` (<16ms / 60fps). Single full-frame in-memory render, no terminal I/O. Median 461277.23 ns => 0.461277 ms."
+    },
+    "doctor_command_s": {
+      "crate": "mimir-session",
+      "bench_id": "session_doctor/doctor_probe",
+      "measured_corpus": "init'd tempdir workspace; TurnRunner::doctor probe-only path",
+      "directly_measures_target": true,
+      "notes": "Maps to `Doctor command` (<2s). Probes are all local: config parse, provider capability list, local token counter, context packet build, write-permission, env credential presence. Median 730994.88 ns => 0.000731 s."
+    }
   },
   "ci_gates": {
     "test_timeout_multiplier": 10,
