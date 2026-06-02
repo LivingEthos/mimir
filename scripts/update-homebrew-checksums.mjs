@@ -66,7 +66,7 @@ function archivePath(artifactsDir, rustTarget) {
 }
 
 function formulaUrl(version, rustTarget) {
-  return `https://github.com/LivingEthos/mimir/releases/download/v${version}/mimir-cli-${rustTarget}.tar.xz`;
+  return `https://github.com/MisterWonderful/mimir/releases/download/v${version}/mimir-cli-${rustTarget}.tar.xz`;
 }
 
 function formulaVersion(formula) {
@@ -76,7 +76,7 @@ function formulaVersion(formula) {
   }
 
   const versions = new Set(
-    [...formula.matchAll(/github\.com\/LivingEthos\/mimir\/releases\/download\/v([^/]+)\/mimir-cli-/g)].map(
+    [...formula.matchAll(/github\.com\/MisterWonderful\/mimir\/releases\/download\/v([^/]+)\/mimir-cli-/g)].map(
       (match) => match[1],
     ),
   );

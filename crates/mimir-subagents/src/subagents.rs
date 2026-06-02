@@ -96,7 +96,8 @@ pub fn execute(name: &str, query: &str, parent_run_id: Option<&str>) -> Result<E
     execute_in(Utf8Path::new("."), name, query, parent_run_id)
 }
 
-fn execute_in(
+/// Execute a subagent by name against an explicit workspace root.
+pub fn execute_in(
     base: &Utf8Path,
     name: &str,
     query: &str,

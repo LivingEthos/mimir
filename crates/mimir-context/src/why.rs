@@ -3,6 +3,7 @@
 //! Given a file path and a run ID, looks up the context packet for that run
 //! and returns the reason code (or omission reason) for the specified path.
 
+use mimir_runs::{RunDir, RunId};
 use mimir_schemas::ContextPacket;
 use std::path::Path;
 
@@ -52,7 +53,10 @@ pub enum WhyResult {
 /// assert!(matches!(result, mimir_context::why::WhyResult::NotFound));
 /// ```
 pub fn context_why(path: impl AsRef<Path>, run_id: &str) -> Result<WhyResult, anyhow::Error> {
-    let packet_path = format!(".mimir/runs/{}/context_packet.json", run_id);
+    let run_id = RunId::parse(run_id.to_string()).map_err(|_| anyhow::anyhow!("invalid run id"))?;
+    let run_dir = RunDir::open(&camino::Utf8PathBuf::from(".mimir"), &run_id)
+        .map_err(|_| anyhow::anyhow!("No packet found for run {}", run_id))?;
+    let packet_path = run_dir.context_packet_path();
     let data = match std::fs::read_to_string(&packet_path) {
         Ok(d) => d,
         Err(e) => {

@@ -28,3 +28,18 @@ Thumbs.db
 cobertura.xml
 lcov.info
 tarpaulin-report.html
+
+# Frontend build/test artifacts
+apps/studio/dist/
+apps/studio/playwright-report/
+apps/studio/test-results/
+
+# Staged native CLI binaries (regenerable via cargo-dist + scripts/stage-npm-platform-package.mjs)
+packages/cli/bin/mimir-darwin-arm64
+packages/cli/bin/mimir-darwin-x64
+packages/cli/bin/mimir-linux-arm64
+packages/cli/bin/mimir-linux-x64
+packages/cli/bin/mimir-win32-x64.exe
+packages/cli-*/mimir
+packages/cli-*/mimir.exe
+packages/cli-*/bin/

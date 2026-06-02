@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 mimir-schemas = { path = "../mimir-schemas" }
+mimir-security = { path = "../mimir-security" }
 mimir-telemetry = { path = "../mimir-telemetry" }
 serde = { workspace = true }
 serde_json = { workspace = true }

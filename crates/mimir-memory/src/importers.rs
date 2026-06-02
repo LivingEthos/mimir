@@ -729,6 +729,111 @@ mod tests {
         assert!(entries[1].body.contains("parser_roundtrip"));
     }
 
+    /// R-14 memory-pollution guard.
+    ///
+    /// Imported sessions must NEVER be eligible to reach a provider. This test
+    /// drives synthetic sessions through real importers (Aider markdown and
+    /// Codex JSONL — the same fixtures the importer tests use) and asserts:
+    ///
+    /// 1. EVERY imported entry is quarantined: `safe_to_send == false`,
+    ///    `scope == "private"`, `confidence == "provisional"`. If any importer
+    ///    ever produced `safe_to_send == true`, this fails.
+    /// 2. The provider-bound selection path (`MemoryDecisionEngine::is_safe_to_send`,
+    ///    the public eligibility check) FILTERS OUT every imported entry, mirroring
+    ///    the CLI's `entry.safe_to_send` filter in `mimir-cli/src/main.rs`. Even if
+    ///    an imported entry were scored above the threshold, the `safe_to_send`
+    ///    gate keeps it out — so imported content cannot reach a provider.
+    #[test]
+    fn test_imported_entries_quarantined_from_provider() {
+        use crate::engine::{MemoryDecisionEngine, ScoreSignals};
+
+        // Synthetic sessions via real importers — no network, no real secrets.
+        let aider_md =
+            "## USER\n\nLeaked api key sk-synthetic-not-a-real-secret\n\n## ASSISTANT\n\nNoted.\n";
+        let (_aider_dir, aider_path) = make_temp_file("history.md", aider_md);
+        let codex_jsonl = "{\"role\":\"user\",\"content\":\"internal note: do not exfiltrate\"}\n{\"role\":\"assistant\",\"content\":\"understood\"}\n";
+        let (_codex_dir, codex_path) = make_temp_file("session.jsonl", codex_jsonl);
+
+        let mut imported = AiderImporter.import(&aider_path).unwrap();
+        imported.extend(CodexImporter.import(&codex_path).unwrap());
+
+        // Sanity: we actually imported something to assert over.
+        assert_eq!(imported.len(), 4, "expected 2 aider + 2 codex entries");
+
+        // (1) Every imported entry is quarantined.
+        for entry in &imported {
+            assert!(
+                !entry.safe_to_send,
+                "imported entry {} must be safe_to_send=false (R-14)",
+                entry.entry_id
+            );
+            assert_eq!(
+                entry.scope, "private",
+                "imported entry {} must be scope=private",
+                entry.entry_id
+            );
+            assert_eq!(
+                entry.confidence, "provisional",
+                "imported entry {} must be confidence=provisional",
+                entry.entry_id
+            );
+            assert!(
+                entry.imported_from.is_some(),
+                "imported entry {} must record imported_from",
+                entry.entry_id
+            );
+        }
+
+        // (2) The provider-bound selection path excludes every imported entry.
+        let engine = MemoryDecisionEngine::new();
+        for entry in &imported {
+            assert!(
+                !engine.is_safe_to_send(entry),
+                "imported entry {} must NOT be eligible for the provider",
+                entry.entry_id
+            );
+        }
+        let eligible: Vec<_> = imported
+            .iter()
+            .filter(|entry| engine.is_safe_to_send(entry))
+            .collect();
+        assert!(
+            eligible.is_empty(),
+            "no imported entry may pass provider-bound selection, found {}",
+            eligible.len()
+        );
+
+        // Mirror the CLI publish filter (`mimir-cli/src/main.rs` ~4867): the raw
+        // `safe_to_send` flag the CLI relies on must reject all imports too.
+        let cli_safe: Vec<_> = imported.iter().filter(|entry| entry.safe_to_send).collect();
+        assert!(
+            cli_safe.is_empty(),
+            "CLI safe_to_send filter must reject all imported entries"
+        );
+
+        // Defense in depth: even a maximal score cannot flip the gate, because
+        // `is_safe_to_send` AND-gates the `safe_to_send` flag (which stays false).
+        let mut scored = imported[0].clone();
+        engine.score_entry(
+            &mut scored,
+            &ScoreSignals {
+                severity: 1.0,
+                recurrence_count: 100,
+                success_rate: 1.0,
+                task_relevance: 1.0,
+                token_savings: 10_000,
+            },
+        );
+        assert!(
+            scored.promotion_score.unwrap() >= MemoryDecisionEngine::safe_to_send_threshold(),
+            "test setup: scored entry should clear the score threshold"
+        );
+        assert!(
+            !engine.is_safe_to_send(&scored),
+            "a high score must not make an imported entry sendable while safe_to_send=false"
+        );
+    }
+
     #[test]
     fn test_opencode_import() {
         let json = r#"[{"role":"user","content":"Fix the memory leak"},{"role":"assistant","content":"Use Arc instead of Rc."}]"#;

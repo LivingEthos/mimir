@@ -6,7 +6,7 @@ use predicates::str::contains;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn context_packet_validator() -> jsonschema::Validator {
@@ -94,6 +94,14 @@ fn rewrite_packet_included_file(packet_path: &std::path::Path, path: &str, sourc
         trust_level: "trusted".to_string(),
         editable: false,
     }];
+    packet.packet_hash = mimir_context::hash_packet(&packet);
+    std::fs::write(packet_path, serde_json::to_vec_pretty(&packet).unwrap()).unwrap();
+}
+
+fn rewrite_packet_goal(packet_path: &std::path::Path, goal: &str) {
+    let mut packet: mimir_schemas::ContextPacket =
+        serde_json::from_str(&std::fs::read_to_string(packet_path).unwrap()).unwrap();
+    packet.task_card.goal = goal.to_string();
     packet.packet_hash = mimir_context::hash_packet(&packet);
     std::fs::write(packet_path, serde_json::to_vec_pretty(&packet).unwrap()).unwrap();
 }
@@ -579,6 +587,52 @@ fn packet_replay_rejects_stale_capability_snapshot() {
         .assert()
         .failure()
         .stderr(contains("capability snapshot mismatch"));
+    assert_sanitized_error_trace(
+        &run_dir,
+        "mimir.packet.replay",
+        &["main.rs", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+    );
+}
+
+#[test]
+fn packet_share_rejects_stale_capability_snapshot() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+
+    let mut build = Command::cargo_bin("mimir").unwrap();
+    build
+        .current_dir(dir.path())
+        .args([
+            "context",
+            "build",
+            "--provider",
+            "glm",
+            "--model",
+            "glm-5.1",
+        ])
+        .assert()
+        .success();
+
+    let run_dir = latest_run_dir(&dir);
+    let run_id = run_dir.file_name().unwrap().to_string_lossy().to_string();
+    let packet_path = run_dir.join("context_packet.json");
+    rewrite_packet_capability_snapshot(
+        &packet_path,
+        "generated:glm/glm-5.1@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    );
+
+    let mut share = Command::cargo_bin("mimir").unwrap();
+    share
+        .current_dir(dir.path())
+        .args(["packet", "share", &run_id])
+        .assert()
+        .failure()
+        .stderr(contains("capability snapshot mismatch"));
+    assert_sanitized_error_trace(
+        &run_dir,
+        "mimir.packet.share",
+        &["main.rs", "cccccccccccccccccccccccccccccccc"],
+    );
 }
 
 #[test]
@@ -612,6 +666,11 @@ fn packet_replay_rejects_packet_run_id_mismatch() {
         .assert()
         .failure()
         .stderr(contains("packet run_id mismatch"));
+    assert_sanitized_error_trace(
+        &run_dir,
+        "mimir.packet.replay",
+        &["main.rs", "20260101-000000-deadbeef"],
+    );
 }
 
 #[test]
@@ -645,6 +704,11 @@ fn packet_share_rejects_packet_run_id_mismatch() {
         .assert()
         .failure()
         .stderr(contains("packet run_id mismatch"));
+    assert_sanitized_error_trace(
+        &run_dir,
+        "mimir.packet.share",
+        &["main.rs", "20260101-000000-feedface"],
+    );
 }
 
 #[test]
@@ -681,6 +745,11 @@ fn packet_replay_rejects_tampered_packet_hash() {
         .assert()
         .failure()
         .stderr(contains("context packet hash mismatch"));
+    assert_sanitized_error_trace(
+        &run_dir,
+        "mimir.packet.replay",
+        &["main.rs", "tampered replay task"],
+    );
 }
 
 #[test]
@@ -717,6 +786,11 @@ fn packet_share_rejects_tampered_packet_hash() {
         .assert()
         .failure()
         .stderr(contains("context packet hash mismatch"));
+    assert_sanitized_error_trace(
+        &run_dir,
+        "mimir.packet.share",
+        &["main.rs", "tampered share task"],
+    );
 }
 
 #[test]
@@ -756,6 +830,11 @@ fn packet_replay_rejects_changed_included_file() {
         .assert()
         .failure()
         .stderr(contains("source_hash mismatch"));
+    assert_sanitized_error_trace(
+        &run_dir,
+        "mimir.packet.replay",
+        &["main.rs", "println!(\"changed\")"],
+    );
 }
 
 #[test]
@@ -795,6 +874,183 @@ fn packet_share_rejects_changed_included_file() {
         .assert()
         .failure()
         .stderr(contains("source_hash mismatch"));
+    assert_sanitized_error_trace(
+        &run_dir,
+        "mimir.packet.share",
+        &["main.rs", "println!(\"changed\")"],
+    );
+}
+
+#[test]
+fn packet_share_rejects_secret_like_packet_metadata_with_private_trace() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+
+    let mut build = Command::cargo_bin("mimir").unwrap();
+    build
+        .current_dir(dir.path())
+        .args([
+            "context",
+            "build",
+            "--provider",
+            "glm",
+            "--model",
+            "glm-5.1",
+        ])
+        .assert()
+        .success();
+
+    let run_dir = latest_run_dir(&dir);
+    let run_id = run_dir.file_name().unwrap().to_string_lossy().to_string();
+    let packet_path = run_dir.join("context_packet.json");
+    rewrite_packet_goal(
+        &packet_path,
+        "share this synthetic secret sk-12345678901234567890",
+    );
+
+    let mut share = Command::cargo_bin("mimir").unwrap();
+    share
+        .current_dir(dir.path())
+        .args(["packet", "share", &run_id])
+        .assert()
+        .failure()
+        .stderr(contains("context packet contains secret-like text"))
+        .stderr(
+            predicates::str::is_match("sk-12345678901234567890")
+                .unwrap()
+                .not(),
+        );
+    assert_sanitized_error_trace(
+        &run_dir,
+        "mimir.packet.share",
+        &["share this synthetic secret", "sk-12345678901234567890"],
+    );
+}
+
+#[test]
+fn packet_share_and_replay_reject_secret_like_saved_request_with_private_trace() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+
+    let mut build = Command::cargo_bin("mimir").unwrap();
+    build
+        .current_dir(dir.path())
+        .args([
+            "context",
+            "build",
+            "--provider",
+            "glm",
+            "--model",
+            "glm-5.1",
+        ])
+        .assert()
+        .success();
+
+    let run_dir = latest_run_dir(&dir);
+    let run_id = run_dir.file_name().unwrap().to_string_lossy().to_string();
+    std::fs::write(
+        run_dir.join("provider_request.redacted.json"),
+        serde_json::to_vec_pretty(&json!({
+            "model": "glm-5.1",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "synthetic request secret sk-12345678901234567890"
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut share = Command::cargo_bin("mimir").unwrap();
+    share
+        .current_dir(dir.path())
+        .args(["packet", "share", &run_id])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "provider request artifact contains secret-like text",
+        ))
+        .stderr(
+            predicates::str::is_match("sk-12345678901234567890")
+                .unwrap()
+                .not(),
+        );
+    assert_sanitized_error_trace(
+        &run_dir,
+        "mimir.packet.share",
+        &[
+            "provider_request.redacted.json",
+            "synthetic request secret",
+            "sk-12345678901234567890",
+        ],
+    );
+
+    let mut replay = Command::cargo_bin("mimir").unwrap();
+    replay
+        .current_dir(dir.path())
+        .args(["packet", "replay", &run_id, "--request-json"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "provider request artifact contains secret-like text",
+        ))
+        .stderr(
+            predicates::str::is_match("sk-12345678901234567890")
+                .unwrap()
+                .not(),
+        );
+    assert_sanitized_error_trace(
+        &run_dir,
+        "mimir.packet.replay",
+        &[
+            "provider_request.redacted.json",
+            "synthetic request secret",
+            "sk-12345678901234567890",
+        ],
+    );
+}
+
+#[test]
+fn packet_replay_rejects_oversized_saved_request_with_private_trace() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+
+    let mut build = Command::cargo_bin("mimir").unwrap();
+    build
+        .current_dir(dir.path())
+        .args([
+            "context",
+            "build",
+            "--provider",
+            "glm",
+            "--model",
+            "glm-5.1",
+        ])
+        .assert()
+        .success();
+
+    let run_dir = latest_run_dir(&dir);
+    let run_id = run_dir.file_name().unwrap().to_string_lossy().to_string();
+    std::fs::write(
+        run_dir.join("provider_request.redacted.json"),
+        vec![b'a'; 256 * 1024 + 1],
+    )
+    .unwrap();
+
+    let mut replay = Command::cargo_bin("mimir").unwrap();
+    replay
+        .current_dir(dir.path())
+        .args(["packet", "replay", &run_id, "--request-json"])
+        .assert()
+        .failure()
+        .stderr(contains("exceeds size cap"));
+    assert_sanitized_error_trace(
+        &run_dir,
+        "mimir.packet.replay",
+        &["provider_request.redacted.json", ".mimir/runs"],
+    );
 }
 
 #[tokio::test]
@@ -979,6 +1235,152 @@ async fn packet_share_bundle_uses_saved_plan_provider_request() {
     assert_eq!(replay_output.stdout, saved_request);
 }
 
+#[tokio::test]
+async fn context_call_dispatches_saved_mode_specific_request() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("app.txt"), "hello\n").unwrap();
+    let content = json!({
+        "steps": ["Inspect app.txt"],
+        "risks": [],
+        "files_likely_affected": ["app.txt"],
+        "tests_to_run": [],
+        "assumptions": ["synthetic provider"]
+    })
+    .to_string();
+    let plan_server = mock_openai_response(content).await;
+
+    let output = Command::cargo_bin("mimir")
+        .unwrap()
+        .current_dir(dir.path())
+        .env("OPENAI_API_KEY", "test-key")
+        .args([
+            "plan",
+            "Plan a tiny text update",
+            "--editable",
+            "app.txt",
+            "--provider",
+            "openai-compatible",
+            "--model",
+            "mock-model",
+            "--base-url",
+            &plan_server.uri(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&output);
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let run_id = stdout["run_id"].as_str().unwrap();
+    let packet_path = dir
+        .path()
+        .join(".mimir/runs")
+        .join(run_id)
+        .join("context_packet.json");
+
+    let replay_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains("Return only JSON with this shape"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "model": "mock-model",
+            "choices": [{
+                "message": {"content": "replayed saved plan request"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 4}
+        })))
+        .expect(1)
+        .mount(&replay_server)
+        .await;
+
+    let output = Command::cargo_bin("mimir")
+        .unwrap()
+        .current_dir(dir.path())
+        .env("OPENAI_API_KEY", "test-key")
+        .args([
+            "context",
+            "call",
+            packet_path.to_str().unwrap(),
+            "--base-url",
+            &replay_server.uri(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&output);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("replayed saved plan request"));
+    let trace_text =
+        std::fs::read_to_string(packet_path.parent().unwrap().join("trace.spans.jsonl")).unwrap();
+    let spans = trace_spans(&trace_text);
+    assert!(spans
+        .iter()
+        .any(|span| span["name"] == "mimir.context.call"));
+    assert!(
+        spans
+            .iter()
+            .filter(|span| span["name"] == "mimir.provider.dispatch")
+            .count()
+            >= 2
+    );
+    assert!(!trace_text.contains("Plan a tiny text update"));
+}
+
+#[tokio::test]
+async fn context_call_provider_error_records_sanitized_command_span() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("app.txt"), "hello\n").unwrap();
+
+    let mut build = Command::cargo_bin("mimir").unwrap();
+    build
+        .current_dir(dir.path())
+        .args([
+            "context",
+            "build",
+            "--provider",
+            "openai-compatible",
+            "--model",
+            "mock-model",
+        ])
+        .assert()
+        .success();
+
+    let run_dir = latest_run_dir(&dir);
+    let packet_path = run_dir.join("context_packet.json");
+    let body = "synthetic context call error body OPENAI_API_KEY=sk-12345678901234567890";
+    let server = mock_openai_error_response(400, body).await;
+
+    let mut call = Command::cargo_bin("mimir").unwrap();
+    let output = call
+        .current_dir(dir.path())
+        .env("OPENAI_API_KEY", "test-key")
+        .args([
+            "context",
+            "call",
+            packet_path.to_str().unwrap(),
+            "--base-url",
+            &server.uri(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let trace_text = std::fs::read_to_string(run_dir.join("trace.spans.jsonl")).unwrap();
+    let spans = trace_spans(&trace_text);
+    assert!(spans.iter().any(|span| {
+        span["name"] == "mimir.provider.dispatch" && span["attrs"]["status"] == "error"
+    }));
+    assert_sanitized_error_trace(
+        &run_dir,
+        "mimir.context.call",
+        &[
+            "Build a replayable context packet for the current repository",
+            "app.txt",
+            body,
+            "synthetic context call error body",
+        ],
+    );
+}
+
 #[test]
 fn context_call_rejects_run_path_mismatch_before_provider_auth() {
     let dir = TempDir::new().unwrap();
@@ -1086,7 +1488,7 @@ fn context_call_rejects_over_cap_packet_before_provider_auth() {
 #[test]
 fn missing_packet_share_does_not_create_run_directory() {
     let dir = TempDir::new().unwrap();
-    let run_id = "missing-run-xyz";
+    let run_id = "20260101-120000-deadbeef";
 
     let mut cmd = Command::cargo_bin("mimir").unwrap();
     cmd.current_dir(dir.path())
@@ -1101,7 +1503,7 @@ fn missing_packet_share_does_not_create_run_directory() {
 #[test]
 fn missing_trace_export_does_not_create_run_directory() {
     let dir = TempDir::new().unwrap();
-    let run_id = "missing-trace-xyz";
+    let run_id = "20260101-120000-feedface";
 
     let mut cmd = Command::cargo_bin("mimir").unwrap();
     cmd.current_dir(dir.path())
@@ -1111,6 +1513,183 @@ fn missing_trace_export_does_not_create_run_directory() {
         .stdout(contains("No trace found"));
 
     assert!(!dir.path().join(".mimir/runs").join(run_id).exists());
+}
+
+#[test]
+fn trace_export_prefers_first_class_trace_spans() {
+    let dir = TempDir::new().unwrap();
+    let run_id = "20260101-120000-facefeed";
+    let run_dir = dir.path().join(".mimir/runs").join(run_id);
+    std::fs::create_dir_all(&run_dir).unwrap();
+    std::fs::write(
+        run_dir.join("trace.spans.jsonl"),
+        "{\"schema_version\":1,\"span_id\":\"0123456789abcdef\",\"name\":\"mimir.context.build\",\"start_us\":1,\"end_us\":2,\"attrs\":{\"api_key\":\"sk-123456789012345678901234\"}}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        run_dir.join("events.jsonl"),
+        "{\"event\":\"legacy fallback should not win\"}\n",
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("mimir").unwrap();
+    let output = cmd
+        .current_dir(dir.path())
+        .args(["trace", "export", run_id, "--redact"])
+        .output()
+        .unwrap();
+
+    assert_success(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"source\": \"trace.spans.jsonl\""));
+    assert!(stdout.contains("mimir.context.build"));
+    assert!(!stdout.contains("legacy fallback should not win"));
+    assert!(!stdout.contains("sk-123456789012345678901234"));
+}
+
+#[test]
+fn trace_export_malformed_trace_spans_falls_back_to_redacted_events() {
+    let dir = TempDir::new().unwrap();
+    let run_id = "20260101-120000-badc0de0";
+    let run_dir = dir.path().join(".mimir/runs").join(run_id);
+    std::fs::create_dir_all(&run_dir).unwrap();
+    std::fs::write(run_dir.join("trace.spans.jsonl"), "not-json-at-all\n").unwrap();
+    std::fs::write(
+        run_dir.join("events.jsonl"),
+        "{\"event\":\"legacy fallback wins\",\"api_key\":\"sk-123456789012345678901234\"}\n",
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("mimir").unwrap();
+    let output = cmd
+        .current_dir(dir.path())
+        .args(["trace", "export", run_id, "--redact"])
+        .output()
+        .unwrap();
+
+    assert_success(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"source\": \"events.jsonl\""));
+    assert!(stdout.contains("legacy fallback wins"));
+    assert!(!stdout.contains("not-json-at-all"));
+    assert!(!stdout.contains("sk-123456789012345678901234"));
+}
+
+#[test]
+fn trace_export_malformed_trace_and_events_reports_no_trace() {
+    let dir = TempDir::new().unwrap();
+    let run_id = "20260101-120000-bade0001";
+    let run_dir = dir.path().join(".mimir/runs").join(run_id);
+    std::fs::create_dir_all(&run_dir).unwrap();
+    std::fs::write(run_dir.join("trace.spans.jsonl"), "not-json-at-all\n").unwrap();
+    std::fs::write(
+        run_dir.join("events.jsonl"),
+        "{\"api_key\":\"sk-123456789012345678901234\"\n",
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("mimir").unwrap();
+    cmd.current_dir(dir.path())
+        .args(["trace", "export", run_id, "--redact"])
+        .assert()
+        .failure()
+        .stdout(contains("No trace found"))
+        .stdout(contains("not-json-at-all").not())
+        .stdout(contains("sk-123456789012345678901234").not());
+}
+
+#[test]
+fn trace_export_output_write_failure_does_not_print_export_json() {
+    let dir = TempDir::new().unwrap();
+    let run_id = "20260101-120000-dead0002";
+    let run_dir = dir.path().join(".mimir/runs").join(run_id);
+    std::fs::create_dir_all(&run_dir).unwrap();
+    std::fs::write(
+        run_dir.join("trace.spans.jsonl"),
+        "{\"schema_version\":1,\"span_id\":\"0123456789abcdef\",\"name\":\"mimir.context.build\",\"start_us\":1,\"end_us\":2}\n",
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("mimir")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "trace",
+            "export",
+            run_id,
+            "--redact",
+            "--output",
+            "missing-parent/trace.json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("mimir.context.build"));
+    assert!(!stdout.contains("\"events\""));
+}
+
+#[test]
+fn trace_export_rejects_traversal_without_reading_outside_events() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join(".mimir")).unwrap();
+    std::fs::write(
+        dir.path().join(".mimir/events.jsonl"),
+        "{\"secret\":\"sk-123456789012345678901234\"}\n",
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("mimir").unwrap();
+    cmd.current_dir(dir.path())
+        .args(["trace", "export", "..", "--redact"])
+        .assert()
+        .failure()
+        .stdout(contains("No trace found"))
+        .stdout(contains("sk-123456789012345678901234").not());
+}
+
+#[test]
+fn context_call_rejects_included_path_traversal_before_provider_auth() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
+    let outside_name = format!("mimir-outside-context-{}.txt", std::process::id());
+    let outside_rel = format!("../{outside_name}");
+    let outside = dir.path().parent().unwrap().join(&outside_name);
+    std::fs::write(&outside, "outside context\n").unwrap();
+    let outside_hash = sha256_hex(&std::fs::read(&outside).unwrap());
+
+    let mut build = Command::cargo_bin("mimir").unwrap();
+    build
+        .current_dir(dir.path())
+        .args([
+            "context",
+            "build",
+            "--provider",
+            "glm",
+            "--model",
+            "glm-5.1",
+        ])
+        .assert()
+        .success();
+
+    let run_dir = latest_run_dir(&dir);
+    let packet_path = run_dir.join("context_packet.json");
+    rewrite_packet_included_file(&packet_path, &outside_rel, &outside_hash);
+
+    let mut call = Command::cargo_bin("mimir").unwrap();
+    call.current_dir(dir.path())
+        .env_remove("GLM_API_KEY")
+        .env_remove("ZAI_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .args(["context", "call", packet_path.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(contains("included context path escapes workspace"))
+        .stderr(contains("GLM_API_KEY").not())
+        .stderr(contains("ZAI_API_KEY").not());
+
+    let _ = std::fs::remove_file(outside);
 }
 
 #[tokio::test]
@@ -1176,6 +1755,86 @@ async fn plan_writes_provider_backed_artifacts_with_redaction() {
     assert!(!response.contains(leaked));
     assert!(plan.contains("<REDACTED:"));
     assert!(plan_md.contains("<REDACTED:"));
+}
+
+#[tokio::test]
+async fn ask_plain_stdout_redacts_provider_response() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("app.txt"), "hello\n").unwrap();
+    let leaked = "OPENAI_API_KEY=sk-12345678901234567890";
+    let server = mock_openai_response(format!("plain response leaked {leaked}")).await;
+
+    let mut cmd = Command::cargo_bin("mimir").unwrap();
+    let output = cmd
+        .current_dir(dir.path())
+        .env("OPENAI_API_KEY", "test-key")
+        .args([
+            "ask",
+            "Summarize app.txt",
+            "--provider",
+            "openai-compatible",
+            "--model",
+            "mock-model",
+            "--base-url",
+            &server.uri(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_success(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains(leaked));
+    assert!(stdout.contains("<REDACTED:"));
+    let run_dir = latest_run_dir(&dir);
+    let trace_text = std::fs::read_to_string(run_dir.join("trace.spans.jsonl")).unwrap();
+    let spans = trace_spans(&trace_text);
+    assert!(spans.iter().any(|span| span["name"] == "mimir.ask"));
+    assert!(spans
+        .iter()
+        .any(|span| span["name"] == "mimir.context.build"));
+    assert!(spans
+        .iter()
+        .any(|span| span["name"] == "mimir.provider.dispatch"));
+    assert!(!trace_text.contains("Summarize app.txt"));
+}
+
+#[tokio::test]
+async fn ask_provider_error_records_sanitized_command_span() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("app.txt"), "hello\n").unwrap();
+    let task = "Trace ask provider failure privately";
+    let body = "synthetic ask error body OPENAI_API_KEY=sk-12345678901234567890";
+    let server = mock_openai_error_response(400, body).await;
+
+    let mut cmd = Command::cargo_bin("mimir").unwrap();
+    let output = cmd
+        .current_dir(dir.path())
+        .env("OPENAI_API_KEY", "test-key")
+        .args([
+            "ask",
+            task,
+            "--provider",
+            "openai-compatible",
+            "--model",
+            "mock-model",
+            "--base-url",
+            &server.uri(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let run_dir = latest_run_dir(&dir);
+    let trace_text = std::fs::read_to_string(run_dir.join("trace.spans.jsonl")).unwrap();
+    let spans = trace_spans(&trace_text);
+    assert!(spans.iter().any(|span| {
+        span["name"] == "mimir.provider.dispatch" && span["attrs"]["status"] == "error"
+    }));
+    assert_sanitized_error_trace(
+        &run_dir,
+        "mimir.ask",
+        &[task, "app.txt", body, "synthetic ask error body"],
+    );
 }
 
 #[tokio::test]
@@ -2056,6 +2715,11 @@ async fn code_rejects_secret_like_patch_text_without_persisting_it() {
     assert!(report.contains("secret-like text"));
     let patch = std::fs::read_to_string(run_dir.join("patch.diff")).unwrap();
     assert!(patch.contains("<REDACTED:"));
+    assert_sanitized_error_trace(
+        &run_dir,
+        "mimir.code",
+        &["Try to write a secret", "app.txt", leaked],
+    );
 }
 
 #[tokio::test]
@@ -2144,6 +2808,16 @@ async fn mock_openai_response(content: String) -> MockServer {
     server
 }
 
+async fn mock_openai_error_response(status: u16, body: &str) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(status).set_body_string(body))
+        .mount(&server)
+        .await;
+    server
+}
+
 fn latest_run_dir(dir: &TempDir) -> std::path::PathBuf {
     let mut dirs: Vec<_> = std::fs::read_dir(dir.path().join(".mimir/runs"))
         .unwrap()
@@ -2151,6 +2825,56 @@ fn latest_run_dir(dir: &TempDir) -> std::path::PathBuf {
         .collect();
     dirs.sort();
     dirs.pop().unwrap()
+}
+
+fn trace_spans(text: &str) -> Vec<serde_json::Value> {
+    text.lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect()
+}
+
+fn assert_sanitized_error_trace(run_dir: &std::path::Path, command_name: &str, forbidden: &[&str]) {
+    let trace_text = std::fs::read_to_string(run_dir.join("trace.spans.jsonl")).unwrap();
+    let spans = trace_spans(&trace_text);
+    let command_span = spans
+        .iter()
+        .find(|span| span["name"] == command_name)
+        .unwrap_or_else(|| panic!("missing {command_name} span in {trace_text}"));
+    assert_eq!(command_span["attrs"]["status"], "error");
+    assert_eq!(command_span["status"]["code"], "error");
+    assert!(command_span["attrs"].get("run_id").is_some());
+    assert!(command_span["attrs"].get("packet_id").is_some());
+    assert!(command_span["attrs"].get("provider").is_some());
+    assert!(command_span["attrs"].get("model").is_some());
+    assert!(command_span["attrs"].get("error").is_none());
+    assert!(command_span["attrs"].get("message").is_none());
+    assert!(command_span["attrs"].get("path").is_none());
+
+    for value in [
+        "context_packet.json",
+        "provider_request.redacted.json",
+        "response.json",
+        "patch_report.json",
+        ".mimir/runs",
+        "test-key",
+        "OPENAI_API_KEY",
+        "sk-12345678901234567890",
+        "Generate a production implementation plan",
+        "Propose a safe patch",
+        "Repair the previously applied Mimir patch",
+        "Return only JSON",
+        "Current packet_id",
+        "messages",
+        "choices",
+    ]
+    .into_iter()
+    .chain(forbidden.iter().copied())
+    {
+        assert!(
+            !trace_text.contains(value),
+            "trace leaked forbidden value {value:?}:\n{trace_text}"
+        );
+    }
 }
 
 fn assert_success(output: &std::process::Output) {

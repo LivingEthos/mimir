@@ -1,11 +1,12 @@
 //! Mimir CLI entry point.
 
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::process::Command as ProcessCommand;
 
 use anyhow::{anyhow, bail, Result};
 use clap::{Parser, Subcommand};
@@ -17,9 +18,8 @@ use mimir_edit::{
 };
 use mimir_providers::adapters::anthropic::AnthropicAdapter;
 use mimir_providers::{
-    OpenAiCompatibleAdapter, ProviderDispatchAdapter, ProviderGateway, ProviderMessage,
-    ProviderRequest, ProviderResponse, ResponseBlock, TokenUsage, ValidatedPacket,
-    ValidatedProviderRequest,
+    OpenAiCompatibleAdapter, ProviderDispatchAdapter, ProviderGateway, ProviderRequest,
+    ProviderResponse, ResponseBlock, TokenUsage, ValidatedPacket, ValidatedProviderRequest,
 };
 use mimir_runs::{atomic_write, RunDir, RunId};
 use mimir_schemas::{
@@ -27,7 +27,6 @@ use mimir_schemas::{
     PatchStep,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tracing::info;
 
 const MAX_PROVIDER_RESPONSE_ARTIFACT_BYTES: usize = 256 * 1024;
@@ -39,8 +38,6 @@ const MAX_REPAIR_ARTIFACT_BYTES: usize = 256 * 1024;
 const MAX_PATCH_DIFF_ARTIFACT_BYTES: usize = 256 * 1024;
 const MAX_RECORDED_TEST_COMMANDS: usize = 32;
 const MAX_RECORDED_TEST_COMMAND_CHARS: usize = 512;
-const PACKET_SHARE_BUNDLE_KIND: &str = "mimir.packet_share";
-const PACKET_SHARE_BUNDLE_SCHEMA_VERSION: u32 = 1;
 const MAX_COMMAND_RECIPE_BYTES: u64 = 64 * 1024;
 const MAX_COMMAND_RECIPE_OUTPUT_BUDGET: u32 = 32_768;
 const RESERVED_COMMAND_RECIPE_NAMES: &[&str] = &[
@@ -58,64 +55,10 @@ const KNOWN_COMMAND_RECIPE_TOOLS: &[&str] = &[
     "run_tests",
     "search_code",
 ];
-const PROJECT_RULES_TEMPLATE: &str = r"# Mimir Project Rules
-
-Keep durable repository guidance here. Mimir includes this file in context packets when it exists, subject to redaction and size limits.
-
-<!-- MIMIR_PUBLISHED_START -->
-<!-- MIMIR_PUBLISHED_END -->
-";
-const CHECK_NO_SECRET_MATERIAL: &str = r#"# No Provider Secrets
-
-Source-controlled checks should catch obvious credential material before a model call.
-
-- severity: error
-- forbidden: (?i)(api[_-]?key|secret|token|password)\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{16,}
-- forbidden: sk-[A-Za-z0-9]{24,}
-"#;
-const FAST_CHECK_RECIPE: &str = r#"---
-name: fast-check
-description: Run the smallest local checks that cover the current edit scope.
-mode: ask
-retrieval:
-  seeds:
-    - "{{changed_path}}"
-  expand:
-    - imports
-    - tests
-allowed_tools:
-  - run_command
-output_budget_tokens: 2048
-parameters:
-  - name: changed_path
-    description: Path or crate touched by the change.
-    required: false
----
-
-Use this recipe to decide which focused formatter, lint, and test commands should run before a broader validation pass.
-"#;
-const RELEASE_CHECK_RECIPE: &str = r"---
-name: release-check
-description: Run the full release handoff validation gate.
-mode: ask
-retrieval:
-  seeds:
-    - scripts/validate-production.sh
-  expand:
-    - config
-    - tests
-allowed_tools:
-  - run_command
-output_budget_tokens: 2048
-parameters: []
----
-
-Use this recipe before release handoff or after changes that cross multiple workstreams.
-";
 
 #[derive(Parser)]
 #[command(name = "mimir")]
-#[command(about = "Context-governed coding CLI for more accurate AI edits")]
+#[command(about = "Replayable Context for coding agents")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
     #[command(subcommand)]
@@ -246,6 +189,15 @@ enum Commands {
         #[command(subcommand)]
         cmd: MemoryCmd,
     },
+    /// Launch Mimir Studio in a local browser.
+    Ui {
+        /// Loopback TCP port to bind to. Defaults to an available ephemeral port.
+        #[arg(short, long)]
+        port: Option<u16>,
+        /// Print the launch URL without opening a browser.
+        #[arg(long)]
+        no_open: bool,
+    },
     /// Start the TUI (P6).
     Tui {
         /// Path to a ContextPacket JSON file to load.
@@ -278,6 +230,9 @@ enum Commands {
         /// TCP port to bind to.
         #[arg(short, long)]
         port: Option<u16>,
+        /// Start the loopback-only Mimir Studio HTTP/WebSocket API.
+        #[arg(long, conflicts_with = "rpc_stdio")]
+        ui: bool,
         /// Use stdio transport instead of TCP.
         #[arg(long, conflicts_with = "port")]
         rpc_stdio: bool,
@@ -410,6 +365,9 @@ enum ContextCmd {
     Inspect {
         /// Packet file path.
         path: String,
+        /// Output JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
     },
     /// Show token budget.
     Budget,
@@ -489,6 +447,9 @@ enum OverrideCmd {
         /// Auto-grant after N failed attempts.
         #[arg(long, default_value = "3")]
         auto_grant_after: u32,
+        /// Attach to an existing run and count its prior failed attempts.
+        #[arg(long)]
+        run_id: Option<String>,
     },
 }
 
@@ -561,212 +522,200 @@ fn build_packet(
         .build()
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
+fn current_unix_micros() -> u64 {
+    chrono::Utc::now().timestamp_micros().max(0) as u64
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct SharedPacketBundle {
-    schema_version: u32,
-    kind: String,
-    exported_at: String,
-    run_id: String,
-    packet_hash: String,
-    provider: String,
-    model: String,
-    packet: mimir_schemas::ContextPacket,
-    replay: SharedPacketReplay,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct SharedPacketReplay {
-    provider_request_sha256: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    user_prompt_sha256: Option<String>,
-    provider_request_redacted: serde_json::Value,
-}
-
-fn redacted_json_value(value: &impl Serialize) -> Result<serde_json::Value> {
-    let mut json = serde_json::to_value(value)?;
-    mimir_security::redact_json_value(&mut json);
-    Ok(json)
-}
-
-fn redacted_pretty_json_bytes(value: &impl Serialize) -> Result<Vec<u8>> {
-    Ok(serde_json::to_vec_pretty(&redacted_json_value(value)?)?)
-}
-
-fn ensure_context_packet_safe_to_share(packet: &mimir_schemas::ContextPacket) -> Result<()> {
-    let packet_json = serde_json::to_value(packet)?;
-    if redact_value(packet_json.clone()) != packet_json {
-        bail!("context packet contains secret-like text; refusing to create portable share bundle");
+fn trace_hash_hex(parts: &[&str]) -> String {
+    let mut hasher = DefaultHasher::new();
+    for part in parts {
+        part.hash(&mut hasher);
     }
-    Ok(())
+    format!("{:016x}", hasher.finish())
 }
 
-fn user_prompt_sha256(request: &serde_json::Value) -> Option<String> {
-    let messages = request.get("messages")?.as_array()?;
-    let user_message = messages
-        .iter()
-        .find(|message| message.get("role").and_then(|role| role.as_str()) == Some("user"))?;
-    let content = user_message.get("content")?.as_str()?;
-    Some(sha256_hex(content.as_bytes()))
+fn trace_id_for_run(run_id: &str) -> String {
+    format!(
+        "{}{}",
+        trace_hash_hex(&["trace", run_id, "a"]),
+        trace_hash_hex(&["trace", run_id, "b"])
+    )
 }
 
-fn shared_replay_from_request(request: &ProviderRequest) -> Result<SharedPacketReplay> {
-    let provider_request_redacted = redacted_json_value(request)?;
-    shared_replay_from_redacted_request(provider_request_redacted)
+fn trace_span_id(run_id: &str, name: &str, start_us: u64, end_us: u64) -> String {
+    let start = start_us.to_string();
+    let end = end_us.to_string();
+    let pid = std::process::id().to_string();
+    trace_hash_hex(&[run_id, name, &start, &end, &pid])
 }
 
-fn shared_replay_from_redacted_request(
-    provider_request_redacted: serde_json::Value,
-) -> Result<SharedPacketReplay> {
-    let request_bytes = serde_json::to_vec_pretty(&provider_request_redacted)?;
-    if request_bytes.len() > MAX_PROVIDER_REQUEST_ARTIFACT_BYTES {
-        bail!(
-            "provider_request artifact shared packet bundle exceeds size cap ({} bytes > {} bytes)",
-            request_bytes.len(),
-            MAX_PROVIDER_REQUEST_ARTIFACT_BYTES
-        );
-    }
-    Ok(SharedPacketReplay {
-        provider_request_sha256: sha256_hex(&request_bytes),
-        user_prompt_sha256: user_prompt_sha256(&provider_request_redacted),
-        provider_request_redacted,
-    })
-}
-
-fn shared_replay_from_provider_request_artifact(
-    path: &camino::Utf8PathBuf,
-) -> Result<SharedPacketReplay> {
-    let data = redacted_provider_request_artifact_bytes(path)?;
-    let request: serde_json::Value = serde_json::from_slice(&data).map_err(|err| {
-        anyhow!(
-            "provider request artifact '{}' is invalid JSON: {err}",
-            path
-        )
-    })?;
-    shared_replay_from_redacted_request(request)
-}
-
-fn redacted_provider_request_artifact_bytes(path: &camino::Utf8PathBuf) -> Result<Vec<u8>> {
-    let data = fs::read(path).map_err(|err| {
-        anyhow!(
-            "provider request artifact '{}' could not be read: {err}",
-            path
-        )
-    })?;
-    let request: serde_json::Value = serde_json::from_slice(&data).map_err(|err| {
-        anyhow!(
-            "provider request artifact '{}' is invalid JSON: {err}",
-            path
-        )
-    })?;
-    if redact_value(request.clone()) != request {
-        bail!(
-            "provider request artifact '{}' contains secret-like text; refusing to reuse it",
-            path
-        );
-    }
-    Ok(data)
-}
-
-fn build_shared_packet_bundle(
+fn append_context_build_trace_span(
+    run_dir: &RunDir,
     packet: &mimir_schemas::ContextPacket,
-    run_id: &str,
-    replay: SharedPacketReplay,
-) -> Result<SharedPacketBundle> {
-    verify_packet_run_id(packet, run_id)?;
-    verify_packet_replay_preconditions(packet)?;
-    ensure_context_packet_safe_to_share(packet)?;
-    Ok(SharedPacketBundle {
-        schema_version: PACKET_SHARE_BUNDLE_SCHEMA_VERSION,
-        kind: PACKET_SHARE_BUNDLE_KIND.to_string(),
-        exported_at: chrono::Utc::now().to_rfc3339(),
-        run_id: run_id.to_string(),
-        packet_hash: packet.packet_hash.clone(),
-        provider: packet.provider.clone(),
-        model: packet.model.clone(),
-        packet: packet.clone(),
-        replay,
-    })
-}
-
-fn verify_shared_packet_bundle(bundle: &SharedPacketBundle) -> Result<()> {
-    if bundle.schema_version != PACKET_SHARE_BUNDLE_SCHEMA_VERSION {
-        bail!(
-            "unsupported shared packet bundle schema_version {}",
-            bundle.schema_version
-        );
-    }
-    if bundle.kind != PACKET_SHARE_BUNDLE_KIND {
-        bail!(
-            "shared packet bundle kind mismatch: expected {}, got {}",
-            PACKET_SHARE_BUNDLE_KIND,
-            bundle.kind
-        );
-    }
-    verify_packet_integrity(&bundle.packet)?;
-    verify_packet_run_id(&bundle.packet, &bundle.run_id)?;
-    if bundle.packet_hash != bundle.packet.packet_hash {
-        bail!(
-            "shared packet bundle packet_hash mismatch: declared {}, packet {}",
-            bundle.packet_hash,
-            bundle.packet.packet_hash
-        );
-    }
-    if bundle.provider != bundle.packet.provider || bundle.model != bundle.packet.model {
-        bail!("shared packet bundle provider/model metadata mismatch");
-    }
-    let request_bytes = serde_json::to_vec_pretty(&bundle.replay.provider_request_redacted)?;
-    let actual_request_sha256 = sha256_hex(&request_bytes);
-    if bundle.replay.provider_request_sha256 != actual_request_sha256 {
-        bail!(
-            "shared packet bundle provider_request_sha256 mismatch: declared {}, actual {}",
-            bundle.replay.provider_request_sha256,
-            actual_request_sha256
-        );
-    }
-    if let Some(expected_prompt_sha256) = &bundle.replay.user_prompt_sha256 {
-        let actual_prompt_sha256 = user_prompt_sha256(&bundle.replay.provider_request_redacted)
-            .ok_or_else(|| {
-                anyhow!("shared packet bundle request is missing user prompt content")
-            })?;
-        if expected_prompt_sha256 != &actual_prompt_sha256 {
-            bail!(
-                "shared packet bundle user_prompt_sha256 mismatch: declared {}, actual {}",
-                expected_prompt_sha256,
-                actual_prompt_sha256
-            );
-        }
-    }
+    start_us: u64,
+) -> Result<()> {
+    let end_us = current_unix_micros().max(start_us);
+    run_dir.append_trace_span(&mimir_telemetry::TraceSpan {
+        schema_version: mimir_telemetry::TRACE_SPAN_SCHEMA_VERSION,
+        span_id: trace_span_id(&packet.run_id, "mimir.context.build", start_us, end_us),
+        trace_id: Some(trace_id_for_run(&packet.run_id)),
+        parent_id: None,
+        name: "mimir.context.build".to_string(),
+        kind: Some(mimir_telemetry::TraceSpanKind::Internal),
+        start_us,
+        end_us,
+        attrs: Some(serde_json::json!({
+            "run_id": packet.run_id,
+            "packet_id": packet.packet_id,
+            "provider": packet.provider,
+            "model": packet.model,
+            "status": "ok",
+            "estimated_input_tokens": packet.estimated_input_tokens,
+        })),
+        events: None,
+        status: Some(mimir_telemetry::TraceSpanStatus {
+            code: Some(mimir_telemetry::TraceSpanStatusCode::Ok),
+            message: None,
+        }),
+    })?;
     Ok(())
 }
 
-fn shared_bundle_request_bytes(bundle: &SharedPacketBundle) -> Result<Vec<u8>> {
-    verify_shared_packet_bundle(bundle)?;
-    Ok(serde_json::to_vec_pretty(
-        &bundle.replay.provider_request_redacted,
-    )?)
+fn append_provider_dispatch_trace_span(
+    run_dir: &RunDir,
+    packet: &mimir_schemas::ContextPacket,
+    start_us: u64,
+    request_input_tokens: u32,
+    request_max_tokens: Option<u32>,
+    response: Option<&ProviderResponse>,
+) -> Result<()> {
+    let end_us = current_unix_micros().max(start_us);
+    let status_label = if response.is_some() { "ok" } else { "error" };
+    let mut attrs = serde_json::json!({
+        "run_id": packet.run_id,
+        "packet_id": packet.packet_id,
+        "provider": packet.provider,
+        "model": packet.model,
+        "status": status_label,
+        "request_input_tokens": request_input_tokens,
+        "request_max_tokens": request_max_tokens,
+    });
+    if let Some(response) = response {
+        let usage = &response.usage;
+        attrs["input_tokens"] = serde_json::json!(usage.input_tokens);
+        attrs["output_tokens"] = serde_json::json!(usage.output_tokens);
+        attrs["total_tokens"] =
+            serde_json::json!(usage.input_tokens.saturating_add(usage.output_tokens));
+        attrs["cache_creation_input_tokens"] = serde_json::json!(usage.cache_creation_input_tokens);
+        attrs["cache_read_input_tokens"] = serde_json::json!(usage.cache_read_input_tokens);
+        attrs["estimated_cost_usd"] = serde_json::json!(estimate_provider_cost(
+            &packet.provider,
+            &response.model,
+            usage,
+        ));
+    }
+
+    run_dir.append_trace_span(&mimir_telemetry::TraceSpan {
+        schema_version: mimir_telemetry::TRACE_SPAN_SCHEMA_VERSION,
+        span_id: trace_span_id(&packet.run_id, "mimir.provider.dispatch", start_us, end_us),
+        trace_id: Some(trace_id_for_run(&packet.run_id)),
+        parent_id: None,
+        name: "mimir.provider.dispatch".to_string(),
+        kind: Some(mimir_telemetry::TraceSpanKind::Client),
+        start_us,
+        end_us,
+        attrs: Some(attrs),
+        events: None,
+        status: Some(mimir_telemetry::TraceSpanStatus {
+            code: Some(if response.is_some() {
+                mimir_telemetry::TraceSpanStatusCode::Ok
+            } else {
+                mimir_telemetry::TraceSpanStatusCode::Error
+            }),
+            message: None,
+        }),
+    })?;
+    Ok(())
 }
 
-fn read_shared_packet_bundle(path: &Path) -> Result<SharedPacketBundle> {
-    let data = fs::read_to_string(path).map_err(|err| {
-        anyhow!(
-            "shared packet bundle '{}' could not be read: {err}",
-            path.display()
-        )
+fn append_command_trace_span(
+    run_dir: &RunDir,
+    packet: &mimir_schemas::ContextPacket,
+    name: &str,
+    start_us: u64,
+    status_label: &str,
+) -> Result<()> {
+    append_command_trace_span_for_run(
+        run_dir,
+        &packet.run_id,
+        packet,
+        name,
+        start_us,
+        status_label,
+    )
+}
+
+fn append_command_trace_span_for_run(
+    run_dir: &RunDir,
+    trace_run_id: &str,
+    packet: &mimir_schemas::ContextPacket,
+    name: &str,
+    start_us: u64,
+    status_label: &str,
+) -> Result<()> {
+    let end_us = current_unix_micros().max(start_us);
+    run_dir.append_trace_span(&mimir_telemetry::TraceSpan {
+        schema_version: mimir_telemetry::TRACE_SPAN_SCHEMA_VERSION,
+        span_id: trace_span_id(trace_run_id, name, start_us, end_us),
+        trace_id: Some(trace_id_for_run(trace_run_id)),
+        parent_id: None,
+        name: name.to_string(),
+        kind: Some(mimir_telemetry::TraceSpanKind::Internal),
+        start_us,
+        end_us,
+        attrs: Some(serde_json::json!({
+            "run_id": trace_run_id,
+            "packet_id": packet.packet_id,
+            "provider": packet.provider,
+            "model": packet.model,
+            "status": status_label,
+        })),
+        events: None,
+        status: Some(mimir_telemetry::TraceSpanStatus {
+            code: Some(if status_label == "ok" {
+                mimir_telemetry::TraceSpanStatusCode::Ok
+            } else {
+                mimir_telemetry::TraceSpanStatusCode::Error
+            }),
+            message: None,
+        }),
     })?;
-    let bundle: SharedPacketBundle = serde_json::from_str(&data).map_err(|err| {
-        anyhow!(
-            "shared packet bundle '{}' is invalid JSON: {err}",
-            path.display()
-        )
-    })?;
-    verify_shared_packet_bundle(&bundle)?;
-    Ok(bundle)
+    Ok(())
+}
+
+fn packet_trace_context_for_run(run_id: &str) -> Option<(RunDir, mimir_schemas::ContextPacket)> {
+    let parsed_run_id = RunId::parse(run_id.to_string()).ok()?;
+    let run_dir = RunDir::open(&camino::Utf8PathBuf::from(".mimir"), &parsed_run_id).ok()?;
+    let packet_path = run_dir.context_packet_path();
+    let metadata = fs::symlink_metadata(packet_path.as_std_path()).ok()?;
+    if !metadata.file_type().is_file() {
+        return None;
+    }
+    let data = fs::read_to_string(packet_path.as_std_path()).ok()?;
+    let packet = serde_json::from_str(&data).ok()?;
+    Some((run_dir, packet))
+}
+
+fn append_packet_command_trace_span_if_available(
+    run_id: &str,
+    name: &str,
+    start_us: u64,
+    status_label: &str,
+) -> Result<()> {
+    if let Some((run_dir, packet)) = packet_trace_context_for_run(run_id) {
+        append_command_trace_span_for_run(&run_dir, run_id, &packet, name, start_us, status_label)?;
+    }
+    Ok(())
 }
 
 fn write_bytes_to_output(output: Option<String>, bytes: &[u8], label: &str) -> Result<()> {
@@ -781,112 +730,133 @@ fn write_bytes_to_output(output: Option<String>, bytes: &[u8], label: &str) -> R
     Ok(())
 }
 
-fn write_file_if_missing(path: &Path, content: &str) -> Result<bool> {
-    if path.exists() {
-        return Ok(false);
+fn parse_trace_export_jsonl(data: &str) -> Result<Vec<serde_json::Value>> {
+    let mut events = Vec::new();
+    for (line_index, line) in data.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let event = serde_json::from_str::<serde_json::Value>(line).map_err(|error| {
+            anyhow!(
+                "trace event line {} is not valid JSON: {}",
+                line_index + 1,
+                error
+            )
+        })?;
+        events.push(event);
     }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+    if events.is_empty() {
+        bail!("trace log contains no events");
     }
-    fs::write(path, content)?;
-    Ok(true)
+    Ok(events)
 }
 
-fn init_project_files(dir: &str) -> Result<Vec<String>> {
-    let base = Path::new(dir);
-    let mimir_root = base.join(".mimir");
-    fs::create_dir_all(mimir_root.join("checks"))?;
-    fs::create_dir_all(mimir_root.join("commands"))?;
-
-    let mut created = Vec::new();
-    if write_file_if_missing(
-        &mimir_root.join("config.yaml"),
-        "version: 1\ncap_tokens: 64000\n",
-    )? {
-        created.push(".mimir/config.yaml".to_string());
-    }
-    if write_file_if_missing(&mimir_root.join("project-rules.md"), PROJECT_RULES_TEMPLATE)? {
-        created.push(".mimir/project-rules.md".to_string());
-    }
-    if write_file_if_missing(
-        &mimir_root.join("checks/no-provider-secrets.md"),
-        CHECK_NO_SECRET_MATERIAL,
-    )? {
-        created.push(".mimir/checks/no-provider-secrets.md".to_string());
-    }
-    if write_file_if_missing(
-        &mimir_root.join("commands/fast-check.md"),
-        FAST_CHECK_RECIPE,
-    )? {
-        created.push(".mimir/commands/fast-check.md".to_string());
-    }
-    if write_file_if_missing(
-        &mimir_root.join("commands/release-check.md"),
-        RELEASE_CHECK_RECIPE,
-    )? {
-        created.push(".mimir/commands/release-check.md".to_string());
-    }
-    Ok(created)
-}
-
-fn check_command_output(
-    checks: &[mimir_review::checks::Check],
-    findings: &[mimir_review::Finding],
-) -> serde_json::Value {
-    let blocking = findings
-        .iter()
-        .filter(|finding| matches!(finding.severity.as_str(), "error" | "critical"))
-        .count();
+fn check_command_output(result: &mimir_session::CheckRunResult) -> serde_json::Value {
     serde_json::json!({
-        "checks_loaded": checks.len(),
-        "findings": findings,
-        "blocking_findings": blocking,
-        "passed": blocking == 0,
+        "checks_loaded": result.checks_loaded,
+        "findings": result.findings,
+        "blocking_findings": result.blocking_findings,
+        "passed": result.passed,
     })
 }
 
 fn run_check_command(ci: bool, json: bool) -> Result<()> {
-    let base = camino::Utf8Path::new(".");
-    let checks = mimir_review::checks::load_checks(base);
-    let findings = mimir_review::checks::run_checks(&checks, base);
-    let output = check_command_output(&checks, &findings);
-    let passed = output
-        .get("passed")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
+    let runner = mimir_session::TurnRunner::for_workspace(camino::Utf8PathBuf::from("."));
+    let result = runner.check()?;
+    let output = check_command_output(&result);
 
     if json {
         println!("{}", redacted_json_string(&output)?);
     } else {
-        println!("Loaded {} source-controlled checks", checks.len());
-        if findings.is_empty() {
+        println!("Loaded {} source-controlled checks", result.checks_loaded);
+        if result.findings.is_empty() {
             println!("No check findings");
         } else {
-            println!("Check findings: {}", findings.len());
-            for finding in &findings {
+            println!("Check findings: {}", result.findings.len());
+            for finding in &result.findings {
                 println!(
                     "  {}: {} ({})",
                     finding.severity,
-                    finding.description,
-                    finding.paths.join(", ")
+                    redacted_message(&finding.description),
+                    redacted_message(finding.paths.join(", "))
                 );
             }
         }
     }
 
-    if ci && !passed {
+    if ci && !result.passed {
         std::process::exit(1);
     }
     Ok(())
 }
 
-fn packet_guidance_paths(packet: &mimir_schemas::ContextPacket) -> Vec<String> {
-    packet
-        .included
-        .iter()
-        .filter(|item| item.reason_code == "manifest_reference")
-        .map(|item| item.path.clone())
-        .collect()
+fn ui_launch_lines(info: &mimir_server::UiServerInfo, no_open: bool) -> Vec<String> {
+    let mut lines = vec![
+        format!("Mimir Studio: {}", info.launch_url()),
+        format!("Mimir Studio API: {}", info.base_url),
+    ];
+    if no_open {
+        lines.push("Browser open disabled by --no-open".to_string());
+    }
+    lines
+}
+
+fn run_ui_command(port: Option<u16>, no_open: bool) -> Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async move {
+        let bind_addr = format!("127.0.0.1:{}", port.unwrap_or(0));
+        let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+        let workspace_root = camino::Utf8PathBuf::from_path_buf(std::env::current_dir()?)
+            .map_err(|path| anyhow!("workspace root is not UTF-8: {}", path.display()))?;
+        let config = mimir_server::UiServerConfig::new(workspace_root, None);
+        let info = config.info_for_listener(&listener)?;
+        let launch_url = info.launch_url();
+
+        for line in ui_launch_lines(&info, no_open) {
+            println!("{line}");
+        }
+
+        if !no_open {
+            match open_browser(&launch_url) {
+                Ok(()) => println!("Opened Mimir Studio in your browser."),
+                Err(error) => eprintln!("Could not open browser automatically: {error}"),
+            }
+        }
+
+        mimir_server::run_ui_server(listener, config).await
+    })
+}
+
+fn open_browser(url: &str) -> Result<()> {
+    let status = browser_open_command(url).status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        bail!("browser opener exited with status {status}");
+    }
+}
+
+fn browser_open_command(url: &str) -> ProcessCommand {
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = ProcessCommand::new("open");
+        command.arg(url);
+        command
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut command = ProcessCommand::new("cmd");
+        command.args(["/C", "start", "", url]);
+        command
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        let mut command = ProcessCommand::new("xdg-open");
+        command.arg(url);
+        command
+    }
 }
 
 fn run_context_suggest_command(
@@ -895,44 +865,28 @@ fn run_context_suggest_command(
     model: Option<String>,
     json: bool,
 ) -> Result<()> {
-    let provider = normalized_provider(&provider);
-    let model = model.unwrap_or_else(|| default_model(&provider).to_string());
-    let run_id = RunId::generate();
-    let mimir_root = camino::Utf8PathBuf::from(".mimir");
-    let run_dir = RunDir::create(&mimir_root, &run_id)?;
-    let packet = build_packet(&task, "ask", run_id.clone(), &provider, &model, Vec::new())?;
-    let packet_json = serde_json::to_vec_pretty(&packet)?;
-    atomic_write(&run_dir.context_packet_path(), &packet_json)?;
-
-    let likely_files = packet
-        .included
-        .iter()
-        .filter(|item| item.reason_code != "manifest_reference")
-        .take(12)
-        .map(|item| item.path.clone())
-        .collect::<Vec<_>>();
-    let risky_omissions = packet
-        .omitted_candidates
-        .iter()
-        .filter(|item| item.risk.is_some())
-        .take(12)
-        .map(|item| {
-            serde_json::json!({
-                "path": item.path,
-                "reason": item.reason_for_omission,
-                "risk": item.risk,
-            })
-        })
-        .collect::<Vec<_>>();
-    let checks_loaded = mimir_review::checks::load_checks(camino::Utf8Path::new(".")).len();
+    let runner = mimir_session::TurnRunner::for_workspace(camino::Utf8PathBuf::from("."));
+    let result = runner.suggest_context(mimir_session::ContextSuggestRequest {
+        task: task.clone(),
+        provider,
+        model,
+    })?;
+    let run_id = result.run_id.clone();
+    let packet_id = result.packet_id.clone();
+    let packet_path = result.packet_path.to_string();
+    let estimated_input_tokens = result.estimated_input_tokens;
+    let guidance_files = result.guidance_files.clone();
+    let likely_files = result.likely_files.clone();
+    let risky_omissions = result.risky_omissions.clone();
+    let checks_loaded = result.checks_loaded;
     let output = serde_json::json!({
-        "run_id": run_id.to_string(),
-        "packet_id": packet.packet_id.clone(),
-        "packet_path": run_dir.context_packet_path().to_string(),
-        "estimated_input_tokens": packet.estimated_input_tokens,
-        "guidance_files": packet_guidance_paths(&packet),
-        "likely_files": likely_files.clone(),
-        "risky_omissions": risky_omissions.clone(),
+        "run_id": run_id,
+        "packet_id": packet_id,
+        "packet_path": packet_path,
+        "estimated_input_tokens": estimated_input_tokens,
+        "guidance_files": guidance_files,
+        "likely_files": likely_files,
+        "risky_omissions": risky_omissions,
         "checks_loaded": checks_loaded,
         "next_steps": [
             "Inspect the packet before provider calls.",
@@ -945,56 +899,53 @@ fn run_context_suggest_command(
         println!("{}", redacted_json_string(&output)?);
     } else {
         println!("Suggested context for: {}", task);
-        println!("Run ID: {}", run_id);
-        println!("Packet path: {}", run_dir.context_packet_path());
-        println!("Estimated input tokens: {}", packet.estimated_input_tokens);
-        let guidance = packet_guidance_paths(&packet);
-        if !guidance.is_empty() {
+        println!("Run ID: {}", result.run_id);
+        println!("Packet path: {}", result.packet_path);
+        println!("Estimated input tokens: {}", result.estimated_input_tokens);
+        if !result.guidance_files.is_empty() {
             println!("Guidance files:");
-            for path in guidance {
+            for path in &result.guidance_files {
                 println!("  {}", path);
             }
         }
-        if !likely_files.is_empty() {
+        if !result.likely_files.is_empty() {
             println!("Likely starting files:");
-            for path in likely_files {
+            for path in &result.likely_files {
                 println!("  {}", path);
             }
         }
-        if !risky_omissions.is_empty() {
-            println!("Risky omissions: {}", risky_omissions.len());
+        if !result.risky_omissions.is_empty() {
+            println!("Risky omissions: {}", result.risky_omissions.len());
         }
-        println!("Source-controlled checks loaded: {}", checks_loaded);
+        println!("Source-controlled checks loaded: {}", result.checks_loaded);
     }
     Ok(())
 }
 
 fn run_explore_command(query: String, json: bool) -> Result<()> {
-    let run_id = RunId::generate();
-    let mimir_root = camino::Utf8PathBuf::from(".mimir");
-    let run_dir = RunDir::create(&mimir_root, &run_id)?;
-    let evidence =
-        mimir_subagents::subagents::execute("search", &query, Some(&run_id.to_string()))?;
-    let artifact = run_dir.root().join("explore_evidence.json");
-    write_redacted_json_artifact(&artifact, &evidence, ArtifactSizeClass::ProviderResponse)?;
+    let runner = mimir_session::TurnRunner::for_workspace(camino::Utf8PathBuf::from("."));
+    let result = runner.explore(mimir_session::ExploreRequest { query })?;
 
     if json {
         let output = serde_json::json!({
-            "run_id": run_id.to_string(),
-            "evidence_path": artifact.to_string(),
-            "evidence": evidence,
+            "run_id": result.run_id,
+            "evidence_path": result.evidence_path.to_string(),
+            "evidence": result.evidence,
         });
         println!("{}", redacted_json_string(&output)?);
     } else {
-        println!("Exploration run: {}", run_id);
-        println!("Evidence path: {}", artifact);
-        println!("Subagent: {}", evidence.subagent);
-        println!("Confidence: {:.0}%", evidence.confidence * 100.0);
-        for finding in &evidence.findings {
-            println!("  {}", finding);
+        println!("Exploration run: {}", result.run_id);
+        println!("Evidence path: {}", result.evidence_path);
+        println!("Subagent: {}", result.evidence.subagent);
+        println!("Confidence: {:.0}%", result.evidence.confidence * 100.0);
+        for finding in &result.evidence.findings {
+            println!("  {}", redacted_message(finding));
         }
-        if !evidence.relevant_paths.is_empty() {
-            println!("Relevant paths: {}", evidence.relevant_paths.join(", "));
+        if !result.evidence.relevant_paths.is_empty() {
+            println!(
+                "Relevant paths: {}",
+                redacted_message(result.evidence.relevant_paths.join(", "))
+            );
         }
     }
     Ok(())
@@ -1338,32 +1289,6 @@ fn looks_like_path(value: &str) -> bool {
     value.contains('/') || value.contains('\\') || value.ends_with(".json")
 }
 
-fn verify_packet_integrity(packet: &mimir_schemas::ContextPacket) -> Result<()> {
-    let recomputed = mimir_context::hash_packet(packet);
-    if packet.packet_hash != recomputed {
-        bail!(
-            "context packet hash mismatch: declared {}, recomputed {}",
-            packet.packet_hash,
-            recomputed
-        );
-    }
-    Ok(())
-}
-
-fn verify_packet_run_id(
-    packet: &mimir_schemas::ContextPacket,
-    expected_run_id: &str,
-) -> Result<()> {
-    if packet.run_id != expected_run_id {
-        bail!(
-            "packet run_id mismatch: packet declares {}, but run directory is {}",
-            packet.run_id,
-            expected_run_id
-        );
-    }
-    Ok(())
-}
-
 fn run_id_from_packet_path(path: &Path) -> Option<String> {
     if path.file_name()?.to_str()? != "context_packet.json" {
         return None;
@@ -1376,13 +1301,27 @@ fn run_id_from_packet_path(path: &Path) -> Option<String> {
     Some(run_dir.file_name()?.to_str()?.to_string())
 }
 
-fn require_packet_path_run_id(packet: &mimir_schemas::ContextPacket, path: &Path) -> Result<()> {
+fn require_packet_path_run_id(path: &Path) -> Result<String> {
     let expected_run_id = run_id_from_packet_path(path).ok_or_else(|| {
         anyhow!(
             "context call requires a packet at .mimir/runs/<run_id>/context_packet.json before writing run artifacts"
         )
     })?;
-    verify_packet_run_id(packet, &expected_run_id)
+    let run_id = RunId::parse(expected_run_id).map_err(|_| anyhow!("invalid run id"))?;
+    let canonical_input = std::fs::canonicalize(path)?;
+    let expected_path = Path::new(".mimir")
+        .join("runs")
+        .join(run_id.as_str())
+        .join("context_packet.json");
+    let canonical_expected = std::fs::canonicalize(&expected_path).map_err(|_| {
+        anyhow!(
+            "context call requires a packet at .mimir/runs/<run_id>/context_packet.json before writing run artifacts"
+        )
+    })?;
+    if canonical_input != canonical_expected {
+        bail!("context packet path escapes .mimir/runs");
+    }
+    Ok(run_id.to_string())
 }
 
 fn current_capability_snapshot_ref(provider: &str, model: &str) -> Result<String> {
@@ -1391,98 +1330,12 @@ fn current_capability_snapshot_ref(provider: &str, model: &str) -> Result<String
         .map_err(anyhow::Error::msg)
 }
 
-fn verify_capability_snapshot_ref(packet: &mimir_schemas::ContextPacket) -> Result<()> {
-    let current = current_capability_snapshot_ref(&packet.provider, &packet.model)?;
-    if !mimir_providers::capabilities::snapshot_refs_match(
-        &current,
-        &packet.capability_snapshot_ref,
-    ) {
-        bail!(
-            "capability snapshot mismatch: packet snapshot {} does not match current {} for {}/{}",
-            packet.capability_snapshot_ref,
-            current,
-            packet.provider,
-            packet.model
-        );
-    }
-    Ok(())
-}
-
 fn verify_packet_replay_preconditions(packet: &mimir_schemas::ContextPacket) -> Result<()> {
-    verify_packet_integrity(packet)?;
-    verify_capability_snapshot_ref(packet)
-}
-
-fn included_item_content(item: &mimir_schemas::IncludedItem) -> Result<String> {
-    let bytes = fs::read(&item.path)
-        .map_err(|err| anyhow!("included context '{}' could not be read: {err}", item.path))?;
-    let actual_hash = sha256_hex(&bytes);
-    if actual_hash != item.source_hash {
-        bail!(
-            "included context '{}' source_hash mismatch: declared {}, actual {}",
-            item.path,
-            item.source_hash,
-            actual_hash
-        );
-    }
-    let content = String::from_utf8(bytes)
-        .map_err(|err| anyhow!("included context '{}' is not valid UTF-8: {err}", item.path))?;
-    if contains_secret_like_text(&content) {
-        bail!(
-            "included context '{}' secret_risk: file contains secret-like content",
-            item.path
-        );
-    }
-    Ok(content)
-}
-
-fn verify_included_source_hashes(packet: &mimir_schemas::ContextPacket) -> Result<()> {
-    for item in &packet.included {
-        included_item_content(item)?;
-    }
-    Ok(())
+    mimir_session::packet::verify_packet_replay_preconditions(packet)
 }
 
 fn context_prompt(packet: &mimir_schemas::ContextPacket) -> Result<String> {
-    verify_packet_replay_preconditions(packet)?;
-
-    let mut prompt = String::new();
-    prompt.push_str("Task:\n");
-    prompt.push_str(&packet.task_card.goal);
-    if !packet.task_card.acceptance_criteria.is_empty() {
-        prompt.push_str("\nAcceptance criteria:\n");
-        for criterion in &packet.task_card.acceptance_criteria {
-            prompt.push_str(&format!("- {criterion}\n"));
-        }
-    }
-    prompt.push_str("\n\nContext packet:\n");
-    prompt.push_str(&format!(
-        "packet_id={} packet_hash={} run_id={}\n",
-        packet.packet_id, packet.packet_hash, packet.run_id
-    ));
-
-    if !packet.included.is_empty() {
-        prompt.push_str("\nIncluded context:\n");
-        for item in &packet.included {
-            let content = included_item_content(item)?;
-            prompt.push_str(&format!(
-                "\n--- {} ({}; {}; {} tokens) ---\n{}\n",
-                item.path, item.candidate_kind, item.reason_code, item.tokens, content
-            ));
-        }
-    }
-
-    if !packet.omitted_candidates.is_empty() {
-        prompt.push_str("\nOmitted candidates:\n");
-        for item in &packet.omitted_candidates {
-            prompt.push_str(&format!(
-                "- {} omitted because {} ({} tokens)\n",
-                item.path, item.reason_for_omission, item.estimated_tokens
-            ));
-        }
-    }
-
-    Ok(prompt)
+    mimir_session::packet::context_prompt_for_packet(camino::Utf8Path::new("."), packet)
 }
 
 fn context_packet_summary(packet: &mimir_schemas::ContextPacket) -> Result<String> {
@@ -1520,57 +1373,26 @@ fn context_packet_summary(packet: &mimir_schemas::ContextPacket) -> Result<Strin
     Ok(prompt)
 }
 
-fn provider_extra(
-    packet: &mimir_schemas::ContextPacket,
-) -> Option<HashMap<String, serde_json::Value>> {
-    let mut extra = HashMap::new();
-    if matches!(packet.provider.as_str(), "glm" | "zai") {
-        extra.insert(
-            "thinking".to_string(),
-            serde_json::json!({ "type": "disabled" }),
-        );
-    }
-    if extra.is_empty() {
-        None
-    } else {
-        Some(extra)
-    }
-}
-
 fn request_from_packet_with_prompt(
     packet: &mimir_schemas::ContextPacket,
     system: &str,
     user_prompt: String,
     max_tokens: u32,
 ) -> ProviderRequest {
-    ProviderRequest {
-        model: packet.model.clone(),
-        system: Some(system.to_string()),
-        messages: vec![ProviderMessage {
-            role: "user".to_string(),
-            content: user_prompt,
-        }],
-        tools: None,
-        max_tokens: Some(max_tokens.min(packet.output_reserve_tokens)),
-        temperature: Some(0.0),
-        stream: Some(false),
-        stop_sequences: None,
-        extra: provider_extra(packet),
-    }
+    mimir_session::packet::provider_request_with_prompt(
+        packet,
+        system,
+        user_prompt,
+        max_tokens,
+        false,
+    )
 }
 
 fn request_from_packet(
     packet: &mimir_schemas::ContextPacket,
     stream: bool,
 ) -> Result<ProviderRequest> {
-    let mut request = request_from_packet_with_prompt(
-        packet,
-        "You are Mimir, a careful coding-agent assistant. Answer directly and use the supplied replayable context when it is relevant.",
-        context_prompt(packet)?,
-        packet.output_reserve_tokens,
-    );
-    request.stream = Some(stream);
-    Ok(request)
+    mimir_session::packet::provider_request_from_packet(camino::Utf8Path::new("."), packet, stream)
 }
 
 fn validate_packet_for_dispatch(
@@ -1624,80 +1446,104 @@ fn call_provider_with_request(
     request: ProviderRequest,
     stream: bool,
     cache: bool,
+    run_dir: Option<&RunDir>,
     base_url: Option<String>,
 ) -> Result<ProviderResponse> {
-    if stream {
-        bail!("streaming provider output is not wired yet; rerun without --stream");
-    }
-    if cache {
-        bail!("prompt-cache controls are not wired yet; rerun without --cache");
-    }
-    verify_packet_replay_preconditions(packet)?;
-    let (gateway, validated_request) = validate_packet_for_dispatch(packet, request)?;
+    let trace_start_us = current_unix_micros();
+    let request_input_tokens = request_input_tokens(&request);
+    let request_max_tokens = request.max_tokens;
+    let result = (|| -> Result<ProviderResponse> {
+        if stream {
+            bail!("streaming provider output is not wired yet; rerun without --stream");
+        }
+        if cache {
+            bail!("prompt-cache controls are not wired yet; rerun without --cache");
+        }
+        verify_packet_replay_preconditions(packet)?;
+        let (gateway, validated_request) = validate_packet_for_dispatch(packet, request)?;
 
-    let runtime = tokio::runtime::Runtime::new()?;
-    match packet.provider.as_str() {
-        "anthropic" => {
-            let mut adapter = AnthropicAdapter::new().map_err(|err| anyhow!(err.to_string()))?;
-            if let Some(url) = base_url {
-                adapter = adapter.with_base_url(url);
+        let runtime = tokio::runtime::Runtime::new()?;
+        match packet.provider.as_str() {
+            "anthropic" => {
+                let mut adapter =
+                    AnthropicAdapter::new().map_err(|err| anyhow!(err.to_string()))?;
+                if let Some(url) = base_url {
+                    adapter = adapter.with_base_url(url);
+                }
+                runtime
+                    .block_on(
+                        gateway
+                            .dispatch(ProviderDispatchAdapter::from(&adapter), validated_request),
+                    )
+                    .map_err(|err| anyhow!(err.to_string()))
             }
-            runtime
-                .block_on(
-                    gateway.dispatch(ProviderDispatchAdapter::from(&adapter), validated_request),
+            "glm" | "zai" => {
+                let mut adapter =
+                    OpenAiCompatibleAdapter::glm_from_env_with_model(packet.model.clone())
+                        .map_err(|err| anyhow!(err.to_string()))?;
+                if let Some(url) = base_url {
+                    adapter = adapter.with_base_url(url);
+                }
+                runtime
+                    .block_on(
+                        gateway
+                            .dispatch(ProviderDispatchAdapter::from(&adapter), validated_request),
+                    )
+                    .map_err(|err| anyhow!(err.to_string()))
+            }
+            "openai" | "openai-compatible" => {
+                let mut adapter = OpenAiCompatibleAdapter::generic_from_env(
+                    packet.provider.clone(),
+                    packet.model.clone(),
                 )
-                .map_err(|err| anyhow!(err.to_string()))
-        }
-        "glm" | "zai" => {
-            let mut adapter =
-                OpenAiCompatibleAdapter::glm_from_env_with_model(packet.model.clone())
-                    .map_err(|err| anyhow!(err.to_string()))?;
-            if let Some(url) = base_url {
-                adapter = adapter.with_base_url(url);
+                .map_err(|err| anyhow!(err.to_string()))?;
+                if let Some(url) = base_url {
+                    adapter = adapter.with_base_url(url);
+                }
+                runtime
+                    .block_on(
+                        gateway
+                            .dispatch(ProviderDispatchAdapter::from(&adapter), validated_request),
+                    )
+                    .map_err(|err| anyhow!(err.to_string()))
             }
-            runtime
-                .block_on(
-                    gateway.dispatch(ProviderDispatchAdapter::from(&adapter), validated_request),
+            other => {
+                let resolved = mimir_providers::capabilities::resolve_provider_capabilities(
+                    other,
+                    &packet.model,
                 )
-                .map_err(|err| anyhow!(err.to_string()))
-        }
-        "openai" | "openai-compatible" => {
-            let mut adapter = OpenAiCompatibleAdapter::generic_from_env(
-                packet.provider.clone(),
-                packet.model.clone(),
-            )
-            .map_err(|err| anyhow!(err.to_string()))?;
-            if let Some(url) = base_url {
-                adapter = adapter.with_base_url(url);
-            }
-            runtime
-                .block_on(
-                    gateway.dispatch(ProviderDispatchAdapter::from(&adapter), validated_request),
+                .map_err(anyhow::Error::msg)?;
+                if !resolved.registry_backed {
+                    bail!("unsupported provider '{}'", other);
+                }
+                let mut adapter = OpenAiCompatibleAdapter::generic_from_env(
+                    packet.provider.clone(),
+                    packet.model.clone(),
                 )
-                .map_err(|err| anyhow!(err.to_string()))
-        }
-        other => {
-            let resolved =
-                mimir_providers::capabilities::resolve_provider_capabilities(other, &packet.model)
-                    .map_err(anyhow::Error::msg)?;
-            if !resolved.registry_backed {
-                bail!("unsupported provider '{}'", other);
+                .map_err(|err| anyhow!(err.to_string()))?;
+                if let Some(url) = base_url {
+                    adapter = adapter.with_base_url(url);
+                }
+                runtime
+                    .block_on(
+                        gateway
+                            .dispatch(ProviderDispatchAdapter::from(&adapter), validated_request),
+                    )
+                    .map_err(|err| anyhow!(err.to_string()))
             }
-            let mut adapter = OpenAiCompatibleAdapter::generic_from_env(
-                packet.provider.clone(),
-                packet.model.clone(),
-            )
-            .map_err(|err| anyhow!(err.to_string()))?;
-            if let Some(url) = base_url {
-                adapter = adapter.with_base_url(url);
-            }
-            runtime
-                .block_on(
-                    gateway.dispatch(ProviderDispatchAdapter::from(&adapter), validated_request),
-                )
-                .map_err(|err| anyhow!(err.to_string()))
         }
+    })();
+    if let Some(run_dir) = run_dir {
+        append_provider_dispatch_trace_span(
+            run_dir,
+            packet,
+            trace_start_us,
+            request_input_tokens,
+            request_max_tokens,
+            result.as_ref().ok(),
+        )?;
     }
+    result
 }
 
 fn response_text(response: &ProviderResponse) -> String {
@@ -1834,6 +1680,65 @@ fn append_redacted_event(run_dir: &RunDir, event: &serde_json::Value) -> Result<
     mimir_security::redact_json_value(&mut event);
     run_dir.append_event(&event)?;
     Ok(())
+}
+
+/// Reject a trace-export destination that is a symlink or other non-regular file.
+///
+/// A missing target is allowed (the export creates it). An existing regular file
+/// is allowed (it is overwritten). Anything else — a symlink, directory, fifo —
+/// is refused so the export cannot be redirected through a symlink.
+fn validate_trace_export_output_path(path: &str) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            bail!("refusing to write trace export through symlink: {path}")
+        }
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            bail!("refusing to overwrite non-regular trace export target: {path}")
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => bail!("trace export target '{path}' could not be inspected: {error}"),
+    }
+}
+
+/// Run event types that count as a failed attempt toward an override auto-grant.
+///
+/// These mark a prior attempt to complete work that failed under the current
+/// cap or safety boundary: cost-cap aborts, rejected patches, and failing tests.
+const OVERRIDE_FAILURE_EVENT_TYPES: &[&str] = &[
+    "cost_cap_aborted",
+    "repair_cost_cap_preflight_exceeded",
+    "patch_rejected",
+    "repair_patch_rejected",
+    "patch_tests_failed",
+    "override_attempt_failed",
+];
+
+/// Count prior failed attempts recorded in a run's `events.jsonl`.
+///
+/// A missing event log means zero prior failures. Lines that are not valid JSON
+/// are skipped rather than treated as failures.
+fn count_override_failed_attempts(run_dir: &RunDir) -> Result<u32> {
+    if !run_dir.events_path().exists() {
+        return Ok(0);
+    }
+    let data = run_dir.read_events_to_string()?;
+    let mut count: u32 = 0;
+    for line in data.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if let Some(event_type) = value.get("event_type").and_then(serde_json::Value::as_str) {
+            if OVERRIDE_FAILURE_EVENT_TYPES.contains(&event_type) {
+                count = count.saturating_add(1);
+            }
+        }
+    }
+    Ok(count)
 }
 
 fn contains_secret_like_text(text: &str) -> bool {
@@ -3345,6 +3250,7 @@ fn run_code_repair_loop(
             request,
             false,
             false,
+            Some(ctx.run_dir),
             ctx.options.base_url.clone(),
         ) {
             Ok(response) => response,
@@ -3999,6 +3905,8 @@ fn run_plan_command(
     let run_id = RunId::generate();
     let mimir_root = camino::Utf8PathBuf::from(".mimir");
     let run_dir = RunDir::create(&mimir_root, &run_id)?;
+    let command_start_us = current_unix_micros();
+    let context_start_us = current_unix_micros();
     let packet = build_packet(
         &task,
         "plan",
@@ -4009,10 +3917,24 @@ fn run_plan_command(
     )?;
     let packet_json = serde_json::to_vec_pretty(&packet)?;
     atomic_write(&run_dir.context_packet_path(), &packet_json)?;
+    append_context_build_trace_span(&run_dir, &packet, context_start_us)?;
 
     let request = plan_request_from_packet(&packet)?;
     write_provider_request_artifact(&run_dir, &request)?;
-    let response = call_provider_with_request(&packet, request, false, false, base_url)?;
+    let response = match call_provider_with_request(
+        &packet,
+        request,
+        false,
+        false,
+        Some(&run_dir),
+        base_url,
+    ) {
+        Ok(response) => response,
+        Err(error) => {
+            append_command_trace_span(&run_dir, &packet, "mimir.plan", command_start_us, "error")?;
+            return Err(error);
+        }
+    };
     write_provider_artifacts(&run_dir, &response)?;
 
     let text = response_text(&response);
@@ -4030,6 +3952,7 @@ fn run_plan_command(
             "risk_count": plan.risks.len(),
         }),
     )?;
+    append_command_trace_span(&run_dir, &packet, "mimir.plan", command_start_us, "ok")?;
 
     if json {
         let plan_path = run_dir.root().join("plan.md").to_string();
@@ -4088,6 +4011,7 @@ fn run_code_command(options: CodeCommandOptions) -> Result<()> {
     let run_id = RunId::generate();
     let mimir_root = camino::Utf8PathBuf::from(".mimir");
     let run_dir = RunDir::create(&mimir_root, &run_id)?;
+    let command_start_us = current_unix_micros();
     if let Some(recipe) = &command_recipe {
         write_redacted_json_artifact(
             &run_dir.root().join("command_recipe.json"),
@@ -4095,6 +4019,7 @@ fn run_code_command(options: CodeCommandOptions) -> Result<()> {
             ArtifactSizeClass::ProviderRequest,
         )?;
     }
+    let context_start_us = current_unix_micros();
     let packet = build_packet(
         &task,
         "code",
@@ -4105,6 +4030,7 @@ fn run_code_command(options: CodeCommandOptions) -> Result<()> {
     )?;
     let packet_json = serde_json::to_vec_pretty(&packet)?;
     atomic_write(&run_dir.context_packet_path(), &packet_json)?;
+    append_context_build_trace_span(&run_dir, &packet, context_start_us)?;
 
     let request = code_request_from_packet(
         &packet,
@@ -4149,14 +4075,27 @@ fn run_code_command(options: CodeCommandOptions) -> Result<()> {
                 "reason": &reason,
             }),
         )?;
+        append_command_trace_span(&run_dir, &packet, "mimir.code", command_start_us, "error")?;
         if options.json {
             println!("{}", redacted_json_string(&report)?);
         }
         bail!("{reason}");
     }
     write_provider_request_artifact(&run_dir, &request)?;
-    let response =
-        call_provider_with_request(&packet, request, false, false, options.base_url.clone())?;
+    let response = match call_provider_with_request(
+        &packet,
+        request,
+        false,
+        false,
+        Some(&run_dir),
+        options.base_url.clone(),
+    ) {
+        Ok(response) => response,
+        Err(error) => {
+            append_command_trace_span(&run_dir, &packet, "mimir.code", command_start_us, "error")?;
+            return Err(error);
+        }
+    };
     write_provider_artifacts(&run_dir, &response)?;
     let initial_cost = estimate_provider_cost(&provider, &response.model, &response.usage);
     if let Some(reason) = provider_response_cost_rejection(initial_cost, options.cost_cap) {
@@ -4191,6 +4130,7 @@ fn run_code_command(options: CodeCommandOptions) -> Result<()> {
                 "reason": &reason,
             }),
         )?;
+        append_command_trace_span(&run_dir, &packet, "mimir.code", command_start_us, "error")?;
         if options.json {
             println!("{}", redacted_json_string(&report)?);
         }
@@ -4223,6 +4163,13 @@ fn run_code_command(options: CodeCommandOptions) -> Result<()> {
                     rejected: Some(reason.clone()),
                 };
                 write_patch_report(&run_dir, &report)?;
+                append_command_trace_span(
+                    &run_dir,
+                    &packet,
+                    "mimir.code",
+                    command_start_us,
+                    "error",
+                )?;
                 bail!("patch rejected by provider response validation: {reason}");
             }
         };
@@ -4260,6 +4207,7 @@ fn run_code_command(options: CodeCommandOptions) -> Result<()> {
                 reason: reason.clone(),
             },
         )?;
+        append_command_trace_span(&run_dir, &packet, "mimir.code", command_start_us, "error")?;
         bail!("patch rejected by safety validation: {reason}");
     }
 
@@ -4279,6 +4227,7 @@ fn run_code_command(options: CodeCommandOptions) -> Result<()> {
                 reason: reason.clone(),
             },
         )?;
+        append_command_trace_span(&run_dir, &packet, "mimir.code", command_start_us, "error")?;
         bail!("patch rejected by safety validation: {reason}");
     }
 
@@ -4318,6 +4267,7 @@ fn run_code_command(options: CodeCommandOptions) -> Result<()> {
                 reason: reason.clone(),
             },
         )?;
+        append_command_trace_span(&run_dir, &packet, "mimir.code", command_start_us, "error")?;
         bail!("patch rejected by safety validation: {reason}");
     }
     if !options.dry_run {
@@ -4407,6 +4357,17 @@ fn run_code_command(options: CodeCommandOptions) -> Result<()> {
             }),
         )?;
     }
+    append_command_trace_span(
+        &run_dir,
+        &packet,
+        "mimir.code",
+        command_start_us,
+        if test_failure.is_some() {
+            "error"
+        } else {
+            "ok"
+        },
+    )?;
 
     if options.json {
         println!("{}", redacted_json_string(&report)?);
@@ -4439,11 +4400,6 @@ fn run_code_command(options: CodeCommandOptions) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn redact_value(mut value: serde_json::Value) -> serde_json::Value {
-    mimir_security::redact_json_value(&mut value);
-    value
 }
 
 fn run_eval_context_command(
@@ -4509,130 +4465,35 @@ fn run_eval_context_command(
     Ok(())
 }
 
+fn print_doctor_probe(label: &str, probe: &mimir_session::DoctorProbe) {
+    println!("  {label}: {} ({})", probe.status.as_str(), probe.detail);
+}
+
 fn run_doctor_command() -> Result<()> {
+    let runner = mimir_session::TurnRunner::for_workspace(camino::Utf8PathBuf::from("."));
+    let result = runner.doctor(mimir_session::DoctorRequest {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    })?;
+
     println!("Mimir doctor");
-    println!("  Version: ok ({})", env!("CARGO_PKG_VERSION"));
-    println!("  RunId: ok ({})", RunId::generate());
+    println!("  Version: ok ({})", result.version);
+    println!("  RunId: ok ({})", result.run_id_sample);
+    print_doctor_probe("Config", &result.config);
+    print_doctor_probe("Provider capabilities", &result.provider_capabilities);
+    print_doctor_probe("Token counter", &result.token_counter);
+    print_doctor_probe("Context packet", &result.context_packet);
+    print_doctor_probe("Permissions", &result.permissions);
+    print_doctor_probe("Provider credentials", &result.provider_credentials);
 
-    let mut warnings = 0u32;
-    let mut failures = 0u32;
-
-    let config_path = std::path::Path::new(".mimir/config.yaml");
-    if config_path.is_file() {
-        match std::fs::read_to_string(config_path)
-            .map_err(anyhow::Error::from)
-            .and_then(|content| {
-                serde_yaml::from_str::<serde_yaml::Value>(&content).map_err(anyhow::Error::from)
-            }) {
-            Ok(_) => println!("  Config: ok (.mimir/config.yaml)"),
-            Err(err) => {
-                failures += 1;
-                println!("  Config: fail ({err})");
-            }
-        }
-    } else {
-        warnings += 1;
-        println!("  Config: missing (run `mimir init`)");
-    }
-
-    match mimir_providers::capabilities::provider_capabilities_list().map_err(anyhow::Error::msg) {
-        Ok(list) if !list.providers.is_empty() => {
-            println!(
-                "  Provider capabilities: ok ({} provider(s))",
-                list.providers.len()
-            );
-        }
-        Ok(_) => {
-            failures += 1;
-            println!("  Provider capabilities: fail (registry is empty)");
-        }
-        Err(err) => {
-            failures += 1;
-            println!("  Provider capabilities: fail ({err})");
-        }
-    }
-
-    let token_count = mimir_providers::count::count_local("mimir doctor token counter sanity");
-    if token_count > 0 {
-        println!("  Token counter: ok ({token_count} tokens)");
-    } else {
-        failures += 1;
-        println!("  Token counter: fail (local counter returned zero)");
-    }
-
-    let run_id = RunId::generate();
-    let provider = "glm";
-    let model = default_model(provider);
-    match build_packet(
-        "Mimir doctor context sanity",
-        "ask",
-        run_id,
-        provider,
-        model,
-        Vec::new(),
-    ) {
-        Ok(packet) if packet.packet_hash.len() == 64 => {
-            println!("  Context packet: ok ({})", packet.packet_id);
-        }
-        Ok(packet) => {
-            failures += 1;
-            println!(
-                "  Context packet: fail (unexpected hash length {})",
-                packet.packet_hash.len()
-            );
-        }
-        Err(err) => {
-            failures += 1;
-            println!("  Context packet: fail ({err})");
-        }
-    }
-
-    let permission_dir = if std::path::Path::new(".mimir").is_dir() {
-        std::path::Path::new(".mimir")
-    } else {
-        std::path::Path::new(".")
-    };
-    let probe_path = permission_dir.join(format!(".doctor-write-{}", RunId::generate()));
-    match std::fs::write(&probe_path, b"ok").and_then(|_| std::fs::remove_file(&probe_path)) {
-        Ok(_) => println!("  Permissions: ok ({})", permission_dir.display()),
-        Err(err) => {
-            failures += 1;
-            let _ = std::fs::remove_file(&probe_path);
-            println!("  Permissions: fail ({err})");
-        }
-    }
-
-    let detected_credentials = [
-        ("ANTHROPIC_API_KEY", "anthropic"),
-        ("GLM_API_KEY", "glm"),
-        ("ZAI_API_KEY", "glm"),
-        ("OPENAI_API_KEY", "openai"),
-    ]
-    .into_iter()
-    .filter_map(|(env_var, provider)| {
-        std::env::var(env_var)
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .map(|_| provider)
-    })
-    .collect::<std::collections::BTreeSet<_>>();
-    if detected_credentials.is_empty() {
-        println!("  Provider credentials: optional (none detected)");
-    } else {
-        println!(
-            "  Provider credentials: ok ({})",
-            detected_credentials
-                .into_iter()
-                .collect::<Vec<_>>()
-                .join(", ")
+    if result.failures > 0 {
+        println!("Doctor status: failed");
+        bail!(
+            "mimir doctor found {} failure(s) and {} warning(s)",
+            result.failures,
+            result.warnings
         );
     }
-
-    if failures > 0 {
-        println!("Doctor status: failed");
-        bail!("mimir doctor found {failures} failure(s) and {warnings} warning(s)");
-    }
-    if warnings > 0 {
+    if result.warnings > 0 {
         println!("Doctor status: warnings");
     } else {
         println!("Doctor status: ok");
@@ -4652,7 +4513,8 @@ fn main() -> Result<()> {
             info!("Initializing Mimir in {}", dir);
             let mimir_root = camino::Utf8PathBuf::from(format!("{}/.mimir", dir));
             let _ = RunDir::create(&mimir_root, &RunId::generate());
-            let created = init_project_files(&dir)?;
+            let base = camino::Utf8Path::new(&dir);
+            let created = mimir_session::init_project_files(base)?;
             println!("Initialized .mimir/ in {}", dir);
             if !created.is_empty() {
                 println!("Created workflow files:");
@@ -4716,6 +4578,7 @@ fn main() -> Result<()> {
                 let run_id = RunId::generate();
                 let mimir_root = camino::Utf8PathBuf::from(".mimir");
                 let run_dir = RunDir::create(&mimir_root, &run_id)?;
+                let context_start_us = current_unix_micros();
                 let packet = build_packet(
                     "Build a replayable context packet for the current repository",
                     "ask",
@@ -4726,18 +4589,85 @@ fn main() -> Result<()> {
                 )?;
                 let packet_json = serde_json::to_vec_pretty(&packet)?;
                 atomic_write(&run_dir.context_packet_path(), &packet_json)?;
+                append_context_build_trace_span(&run_dir, &packet, context_start_us)?;
                 println!("Built packet: {}", packet.packet_id);
                 println!("Run ID: {}", run_id);
                 println!("Packet path: {}", run_dir.context_packet_path());
                 println!("Estimated input tokens: {}", packet.estimated_input_tokens);
             }
-            ContextCmd::Inspect { path } => {
+            ContextCmd::Inspect { path, json } => {
                 let data = std::fs::read_to_string(&path)?;
                 let packet: mimir_schemas::ContextPacket = serde_json::from_str(&data)?;
-                println!(
-                    "Packet {}: {} tokens, hash {}",
-                    packet.packet_id, packet.estimated_input_tokens, packet.packet_hash
-                );
+                let format_ranges = |ranges: &[mimir_schemas::ContextRange]| -> String {
+                    if ranges.is_empty() {
+                        "whole file".to_string()
+                    } else {
+                        ranges
+                            .iter()
+                            .map(|range| format!("{}-{}", range.start, range.end))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }
+                };
+                if json {
+                    let included = packet
+                        .included
+                        .iter()
+                        .map(|item| {
+                            serde_json::json!({
+                                "path": item.path,
+                                "ranges": item.ranges,
+                                "reason_code": item.reason_code,
+                                "tokens": item.tokens,
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    let omitted = packet
+                        .omitted_candidates
+                        .iter()
+                        .map(|item| {
+                            serde_json::json!({
+                                "path": item.path,
+                                "ranges": item.ranges,
+                                "reason_for_omission": item.reason_for_omission,
+                                "estimated_tokens": item.estimated_tokens,
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    let view = serde_json::json!({
+                        "packet_id": packet.packet_id,
+                        "estimated_input_tokens": packet.estimated_input_tokens,
+                        "packet_hash": packet.packet_hash,
+                        "included": included,
+                        "omitted": omitted,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&view)?);
+                } else {
+                    println!(
+                        "Packet {}: {} tokens, hash {}",
+                        packet.packet_id, packet.estimated_input_tokens, packet.packet_hash
+                    );
+                    println!("Included ({}):", packet.included.len());
+                    for item in &packet.included {
+                        println!(
+                            "  {} [{}] reason: {} ({} tokens)",
+                            item.path,
+                            format_ranges(&item.ranges),
+                            item.reason_code,
+                            item.tokens
+                        );
+                    }
+                    println!("Omitted ({}):", packet.omitted_candidates.len());
+                    for item in &packet.omitted_candidates {
+                        println!(
+                            "  {} [{}] reason: {} ({} tokens)",
+                            item.path,
+                            format_ranges(&item.ranges),
+                            item.reason_for_omission,
+                            item.estimated_tokens
+                        );
+                    }
+                }
             }
             ContextCmd::Budget => {
                 println!("Token budget: 64000 cap, 4096 output reserve, 512 drift reserve");
@@ -4777,24 +4707,47 @@ fn main() -> Result<()> {
                 stream,
                 cache,
             } => {
-                let data = std::fs::read_to_string(&path)?;
-                let packet: mimir_schemas::ContextPacket = serde_json::from_str(&data)?;
-                require_packet_path_run_id(&packet, Path::new(&path))?;
-                let request = request_from_packet(&packet, stream)?;
+                let run_id = require_packet_path_run_id(Path::new(&path))?;
+                let (packet, request, _) = mimir_session::packet::provider_request_for_run(
+                    camino::Utf8Path::new("."),
+                    &run_id,
+                    stream,
+                )?;
                 let run_dir = RunDir::open(
                     &camino::Utf8PathBuf::from(".mimir"),
-                    &RunId(packet.run_id.clone()),
-                )
-                .ok();
-                if let Some(run_dir) = &run_dir {
-                    write_provider_request_artifact(run_dir, &request)?;
-                }
-                let response =
-                    call_provider_with_request(&packet, request, stream, cache, base_url)?;
-                if let Some(run_dir) = &run_dir {
-                    write_provider_artifacts(run_dir, &response)?;
-                }
-                println!("{}", response_text(&response));
+                    &RunId::parse(packet.run_id.clone()).map_err(|_| anyhow!("invalid run id"))?,
+                )?;
+                let command_start_us = current_unix_micros();
+                write_provider_request_artifact(&run_dir, &request)?;
+                let response = match call_provider_with_request(
+                    &packet,
+                    request,
+                    stream,
+                    cache,
+                    Some(&run_dir),
+                    base_url,
+                ) {
+                    Ok(response) => response,
+                    Err(error) => {
+                        append_command_trace_span(
+                            &run_dir,
+                            &packet,
+                            "mimir.context.call",
+                            command_start_us,
+                            "error",
+                        )?;
+                        return Err(error);
+                    }
+                };
+                write_provider_artifacts(&run_dir, &response)?;
+                append_command_trace_span(
+                    &run_dir,
+                    &packet,
+                    "mimir.context.call",
+                    command_start_us,
+                    "ok",
+                )?;
+                println!("{}", redacted_message(response_text(&response)));
             }
         },
         Commands::Plan {
@@ -4888,8 +4841,14 @@ fn main() -> Result<()> {
                 println!("Running subagent '{}' with query: {}", name, query);
                 let evidence = mimir_subagents::subagents::execute(&name, &query, None)?;
                 println!("Subagent: {}", evidence.subagent);
-                println!("Findings: {}", evidence.findings.join("\n  - "));
-                println!("Paths: {:?}", evidence.relevant_paths);
+                println!(
+                    "Findings: {}",
+                    redacted_message(evidence.findings.join("\n  - "))
+                );
+                println!(
+                    "Paths: {}",
+                    redacted_message(format!("{:?}", evidence.relevant_paths))
+                );
                 println!("Confidence: {:.0}%", evidence.confidence * 100.0);
                 println!("Cost: ${:.4}", evidence.cost_usd);
             }
@@ -5056,6 +5015,9 @@ fn main() -> Result<()> {
                 );
             }
         },
+        Commands::Ui { port, no_open } => {
+            run_ui_command(port, no_open)?;
+        }
         Commands::Tui {
             packet,
             pipeline_result,
@@ -5092,11 +5054,26 @@ fn main() -> Result<()> {
             }
             mimir_tui::run_tui(&mut app)?;
         }
-        Commands::Serve { port, rpc_stdio } => {
+        Commands::Serve {
+            port,
+            ui,
+            rpc_stdio,
+        } => {
             let rt = tokio::runtime::Runtime::new()?;
             let config = mimir_server::ServerConfig {
-                tcp_bind: port.map(|p| format!("127.0.0.1:{}", p)),
+                tcp_bind: (!ui)
+                    .then(|| port.map(|p| format!("127.0.0.1:{}", p)))
+                    .flatten(),
                 stdio: rpc_stdio,
+                ui_bind: ui.then(|| format!("127.0.0.1:{}", port.unwrap_or(0))),
+                ui_token: None,
+                workspace_root: ui
+                    .then(|| {
+                        camino::Utf8PathBuf::from_path_buf(std::env::current_dir()?).map_err(
+                            |path| anyhow!("workspace root is not UTF-8: {}", path.display()),
+                        )
+                    })
+                    .transpose()?,
             };
             rt.block_on(mimir_server::run_server(config))?;
         }
@@ -5112,6 +5089,8 @@ fn main() -> Result<()> {
             let run_id = RunId::generate();
             let mimir_root = camino::Utf8PathBuf::from(".mimir");
             let run_dir = RunDir::create(&mimir_root, &run_id)?;
+            let command_start_us = current_unix_micros();
+            let context_start_us = current_unix_micros();
             let packet = build_packet(
                 &question,
                 "ask",
@@ -5122,10 +5101,31 @@ fn main() -> Result<()> {
             )?;
             let packet_json = serde_json::to_vec_pretty(&packet)?;
             atomic_write(&run_dir.context_packet_path(), &packet_json)?;
+            append_context_build_trace_span(&run_dir, &packet, context_start_us)?;
             let request = request_from_packet(&packet, false)?;
             write_provider_request_artifact(&run_dir, &request)?;
-            let response = call_provider_with_request(&packet, request, false, false, base_url)?;
+            let response = match call_provider_with_request(
+                &packet,
+                request,
+                false,
+                false,
+                Some(&run_dir),
+                base_url,
+            ) {
+                Ok(response) => response,
+                Err(error) => {
+                    append_command_trace_span(
+                        &run_dir,
+                        &packet,
+                        "mimir.ask",
+                        command_start_us,
+                        "error",
+                    )?;
+                    return Err(error);
+                }
+            };
             write_provider_artifacts(&run_dir, &response)?;
+            append_command_trace_span(&run_dir, &packet, "mimir.ask", command_start_us, "ok")?;
             if json {
                 let output = serde_json::json!({
                     "run_id": run_id.to_string(),
@@ -5140,7 +5140,7 @@ fn main() -> Result<()> {
             } else {
                 println!("Run ID: {}", run_id);
                 println!("Packet: {} tokens", packet.estimated_input_tokens);
-                println!("{}", response_text(&response));
+                println!("{}", redacted_message(response_text(&response)));
             }
         }
         Commands::Packet { cmd } => match cmd {
@@ -5149,50 +5149,95 @@ fn main() -> Result<()> {
                 output,
                 packet_only,
             } => {
-                let mimir_root = camino::Utf8PathBuf::from(".mimir");
-                let run_dir = match RunDir::open(&mimir_root, &RunId(run_id.clone())) {
-                    Ok(run_dir) => run_dir,
-                    Err(_) => {
-                        println!("No packet found for run {}", run_id);
-                        std::process::exit(1);
-                    }
-                };
-                let packet_path = run_dir.context_packet_path();
-                if !std::path::Path::new(&packet_path).exists() {
-                    println!("No packet found for run {}", run_id);
-                    std::process::exit(1);
-                }
-                let data = std::fs::read_to_string(&packet_path)?;
-                let packet: mimir_schemas::ContextPacket = serde_json::from_str(&data)?;
-                verify_packet_integrity(&packet)?;
-                verify_packet_run_id(&packet, &run_id)?;
-                verify_included_source_hashes(&packet)?;
+                let command_start_us = current_unix_micros();
                 if packet_only {
-                    let sanitized = redacted_pretty_json_bytes(&packet)?;
-                    write_bytes_to_output(output, &sanitized, "Sanitized packet")?;
-                } else {
-                    let provider_request_path =
-                        run_dir.root().join("provider_request.redacted.json");
-                    let replay = if std::path::Path::new(&provider_request_path).exists() {
-                        shared_replay_from_provider_request_artifact(&provider_request_path)?
-                    } else {
-                        let request = request_from_packet(&packet, false)?;
-                        shared_replay_from_request(&request)?
+                    let sanitized = match mimir_session::packet::redacted_packet_only_bytes_for_run(
+                        camino::Utf8Path::new("."),
+                        &run_id,
+                    ) {
+                        Ok(bytes) => bytes,
+                        Err(error) if error.to_string().contains("No packet found") => {
+                            println!("No packet found for run {}", run_id);
+                            std::process::exit(1);
+                        }
+                        Err(error) => {
+                            append_packet_command_trace_span_if_available(
+                                &run_id,
+                                "mimir.packet.share",
+                                command_start_us,
+                                "error",
+                            )?;
+                            return Err(error);
+                        }
                     };
-                    let bundle = build_shared_packet_bundle(&packet, &run_id, replay)?;
-                    let bundle_json = redacted_pretty_json_bytes(&bundle)?;
-                    write_bytes_to_output(output, &bundle_json, "Shared packet bundle")?;
+                    match write_bytes_to_output(output, &sanitized, "Sanitized packet") {
+                        Ok(()) => append_packet_command_trace_span_if_available(
+                            &run_id,
+                            "mimir.packet.share",
+                            command_start_us,
+                            "ok",
+                        )?,
+                        Err(error) => {
+                            append_packet_command_trace_span_if_available(
+                                &run_id,
+                                "mimir.packet.share",
+                                command_start_us,
+                                "error",
+                            )?;
+                            return Err(error);
+                        }
+                    }
+                } else {
+                    let preview = match mimir_session::packet::share_bundle_preview_for_run(
+                        camino::Utf8Path::new("."),
+                        &run_id,
+                    ) {
+                        Ok(preview) => preview,
+                        Err(error) if error.to_string().contains("No packet found") => {
+                            println!("No packet found for run {}", run_id);
+                            std::process::exit(1);
+                        }
+                        Err(error) => {
+                            append_packet_command_trace_span_if_available(
+                                &run_id,
+                                "mimir.packet.share",
+                                command_start_us,
+                                "error",
+                            )?;
+                            return Err(error);
+                        }
+                    };
+                    let bundle_json =
+                        mimir_session::packet::redacted_pretty_json_bytes(&preview.bundle)?;
+                    match write_bytes_to_output(output, &bundle_json, "Shared packet bundle") {
+                        Ok(()) => append_packet_command_trace_span_if_available(
+                            &run_id,
+                            "mimir.packet.share",
+                            command_start_us,
+                            "ok",
+                        )?,
+                        Err(error) => {
+                            append_packet_command_trace_span_if_available(
+                                &run_id,
+                                "mimir.packet.share",
+                                command_start_us,
+                                "error",
+                            )?;
+                            return Err(error);
+                        }
+                    }
                 }
             }
             PacketCmd::Replay {
                 target,
                 request_json,
             } => {
+                let command_start_us = current_unix_micros();
                 let target_path = std::path::Path::new(&target);
                 if target_path.exists() || looks_like_path(&target) {
-                    let bundle = read_shared_packet_bundle(target_path)?;
+                    let bundle = mimir_session::packet::read_shared_packet_bundle(target_path)?;
                     if request_json {
-                        let bytes = shared_bundle_request_bytes(&bundle)?;
+                        let bytes = mimir_session::packet::shared_bundle_request_bytes(&bundle)?;
                         let mut stdout = std::io::stdout().lock();
                         stdout.write_all(&bytes)?;
                     } else {
@@ -5216,41 +5261,57 @@ fn main() -> Result<()> {
                     return Ok(());
                 }
                 let run_id = target;
-                let mimir_root = camino::Utf8PathBuf::from(".mimir");
-                let run_dir = match RunDir::open(&mimir_root, &RunId(run_id.clone())) {
-                    Ok(run_dir) => run_dir,
-                    Err(_) => {
-                        println!("No packet found for run {}", run_id);
-                        std::process::exit(1);
+                let preview = match mimir_session::packet::replay_request_preview_for_run(
+                    camino::Utf8Path::new("."),
+                    &run_id,
+                ) {
+                    Ok(preview) => preview,
+                    Err(error) => {
+                        append_packet_command_trace_span_if_available(
+                            &run_id,
+                            "mimir.packet.replay",
+                            command_start_us,
+                            "error",
+                        )?;
+                        return Err(error);
                     }
                 };
-                let packet_path = run_dir.context_packet_path();
-                if !std::path::Path::new(&packet_path).exists() {
-                    println!("No packet found for run {}", run_id);
-                    std::process::exit(1);
-                }
-                let data = std::fs::read_to_string(&packet_path)?;
-                let packet: mimir_schemas::ContextPacket = serde_json::from_str(&data)?;
-                verify_packet_run_id(&packet, &run_id)?;
-                verify_packet_replay_preconditions(&packet)?;
-                verify_included_source_hashes(&packet)?;
                 if request_json {
-                    let provider_request_path =
-                        run_dir.root().join("provider_request.redacted.json");
-                    let request_json = if std::path::Path::new(&provider_request_path).exists() {
-                        redacted_provider_request_artifact_bytes(&provider_request_path)?
-                    } else {
-                        let request = request_from_packet(&packet, false)?;
-                        redacted_pretty_json_bytes(&request)?
+                    let request_json = match mimir_session::packet::replay_request_bytes_for_run(
+                        camino::Utf8Path::new("."),
+                        &run_id,
+                    ) {
+                        Ok(bytes) => bytes,
+                        Err(error) => {
+                            append_packet_command_trace_span_if_available(
+                                &run_id,
+                                "mimir.packet.replay",
+                                command_start_us,
+                                "error",
+                            )?;
+                            return Err(error);
+                        }
                     };
+                    append_packet_command_trace_span_if_available(
+                        &run_id,
+                        "mimir.packet.replay",
+                        command_start_us,
+                        "ok",
+                    )?;
                     let mut stdout = std::io::stdout().lock();
                     stdout.write_all(&request_json)?;
                     return Ok(());
                 }
-                println!("Replaying packet {}", packet.packet_id);
-                println!("Task: {}", packet.task_card.goal);
-                println!("Included items: {}", packet.included.len());
-                println!("Estimated tokens: {}", packet.estimated_input_tokens);
+                append_packet_command_trace_span_if_available(
+                    &run_id,
+                    "mimir.packet.replay",
+                    command_start_us,
+                    "ok",
+                )?;
+                println!("Replaying packet {}", preview.packet_id);
+                println!("Run ID: {}", preview.run_id);
+                println!("Packet hash: {}", preview.packet_hash);
+                println!("Replay request sha256: {}", preview.provider_request_sha256);
                 println!(
                     "To replay provider dispatch: mimir context call .mimir/runs/{}/context_packet.json",
                     run_id
@@ -5262,27 +5323,104 @@ fn main() -> Result<()> {
                 cap,
                 reason,
                 auto_grant_after,
+                run_id,
             } => {
-                let run_id = RunId::generate();
-                let req = mimir_schemas::OverrideRequest {
-                    schema_version: 1,
-                    request_id: RunId::generate().to_string(),
-                    run_id: run_id.to_string(),
-                    reason: format!(
-                        "{} (cap: {}, auto_grant: {})",
-                        reason, cap, auto_grant_after
-                    ),
-                    requested_by: "cli".to_string(),
-                };
                 let mimir_root = camino::Utf8PathBuf::from(".mimir");
-                let run_dir = RunDir::create(&mimir_root, &run_id)?;
-                let req_json = serde_json::to_vec_pretty(&req)?;
-                atomic_write(&run_dir.root().join("override_request.json"), &req_json)?;
-                println!("Override request recorded: {}", run_id);
+                // Attach to an existing run to count its prior failed attempts, or
+                // create a fresh run when none is supplied (zero prior failures).
+                let (run_dir, run_id, prior_failures) = match run_id {
+                    Some(existing) => {
+                        let parsed = RunId::parse(existing.clone())
+                            .map_err(|_| anyhow!("invalid run id: {existing}"))?;
+                        let run_dir = RunDir::open(&mimir_root, &parsed)
+                            .map_err(|error| anyhow!("no run found for {existing}: {error}"))?;
+                        let failures = count_override_failed_attempts(&run_dir)?;
+                        (run_dir, parsed, failures)
+                    }
+                    None => {
+                        let generated = RunId::generate();
+                        let run_dir = RunDir::create(&mimir_root, &generated)?;
+                        (run_dir, generated, 0)
+                    }
+                };
+
+                // Drive the grant decision through the reviewed auto-grant engine.
+                let mut manager = mimir_review::override_req::OverrideManager::new();
+                manager.default_threshold = auto_grant_after;
+                let request_id = manager
+                    .request_with_failures(
+                        format!("context_cap:{cap}"),
+                        reason.clone(),
+                        "cli",
+                        prior_failures,
+                    )
+                    .map_err(|error| anyhow!("override request failed: {error}"))?;
+                let request = manager
+                    .get(&request_id)
+                    .expect("override request was just inserted")
+                    .clone();
+                let auto_granted = request.auto_granted;
+
+                // Persist the request artifact and a structured, redacted audit event.
+                write_redacted_json(&run_dir.root().join("override_request.json"), &request)?;
+                append_redacted_event(
+                    &run_dir,
+                    &serde_json::json!({
+                        "event_type": "override_requested",
+                        "timestamp": chrono::Utc::now().to_rfc3339(),
+                        "request_id": request_id,
+                        "run_id": run_id.to_string(),
+                        "requested_cap": cap,
+                        "reason": reason,
+                        "requested_by": "cli",
+                        "auto_grant_after": auto_grant_after,
+                        "prior_failures": prior_failures,
+                        "auto_granted": auto_granted,
+                    }),
+                )?;
+
+                println!("Override request recorded: {}", request_id);
+                println!("  Run ID: {}", run_id);
                 println!("  Requested cap: {} tokens", cap);
-                println!("  Reason: {}", req.reason);
+                println!("  Reason: {}", reason);
+                println!("  Prior failed attempts: {}", prior_failures);
                 println!("  Auto-grant after: {} failed attempts", auto_grant_after);
-                println!("  Status: pending approval");
+
+                if auto_granted {
+                    // The threshold was satisfied: record a grant artifact + audit event.
+                    let grant = mimir_schemas::OverrideGrant {
+                        schema_version: 1,
+                        grant_id: format!("grant-{request_id}"),
+                        request_id: request_id.clone(),
+                        run_id: run_id.to_string(),
+                        granted_cap: cap,
+                        reason: reason.clone(),
+                        granted_by: "auto_after_failures".to_string(),
+                        prior_failures,
+                        auto_grant_after,
+                        granted_at: chrono::Utc::now().to_rfc3339(),
+                    };
+                    write_redacted_json(&run_dir.root().join("override_grant.json"), &grant)?;
+                    append_redacted_event(
+                        &run_dir,
+                        &serde_json::json!({
+                            "event_type": "override_granted",
+                            "timestamp": chrono::Utc::now().to_rfc3339(),
+                            "grant_id": grant.grant_id,
+                            "request_id": request_id,
+                            "run_id": run_id.to_string(),
+                            "granted_cap": cap,
+                            "granted_by": "auto_after_failures",
+                            "reason": reason,
+                            "prior_failures": prior_failures,
+                            "auto_grant_after": auto_grant_after,
+                        }),
+                    )?;
+                    println!("  Grant recorded: {}", grant.grant_id);
+                    println!("  Status: granted (auto_after_failures)");
+                } else {
+                    println!("  Status: pending approval");
+                }
             }
         },
         Commands::Trace { cmd } => match cmd {
@@ -5299,28 +5437,46 @@ fn main() -> Result<()> {
                         std::process::exit(1);
                     }
                 };
-                let trace_path = run_dir.events_path();
-                if !std::path::Path::new(&trace_path).exists() {
-                    println!("No trace found for run {}", run_id);
-                    std::process::exit(1);
-                }
-                let data = std::fs::read_to_string(&trace_path)?;
-                let mut events: Vec<serde_json::Value> = data
-                    .lines()
-                    .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-                    .collect();
+                let (source, mut events) = match run_dir
+                    .read_trace_spans_to_string()
+                    .ok()
+                    .and_then(|data| parse_trace_export_jsonl(&data).ok())
+                {
+                    Some(events) => ("trace.spans.jsonl", events),
+                    None => match run_dir
+                        .read_events_to_string()
+                        .ok()
+                        .and_then(|data| parse_trace_export_jsonl(&data).ok())
+                    {
+                        Some(events) => ("events.jsonl", events),
+                        None => {
+                            println!("No trace found for run {}", run_id);
+                            std::process::exit(1);
+                        }
+                    },
+                };
                 if redact {
+                    // Scrub secret values, then normalize local filesystem paths
+                    // so absolute workspace paths are not leaked in the export.
+                    let workspace_root = std::fs::canonicalize(".")
+                        .ok()
+                        .and_then(|path| camino::Utf8PathBuf::from_path_buf(path).ok());
                     for event in &mut events {
                         mimir_security::redact_json_value(event);
+                        if let Some(root) = workspace_root.as_deref() {
+                            mimir_runs::redact_trace_paths(event, root);
+                        }
                     }
                 }
                 let export = serde_json::json!({
                     "run_id": run_id,
+                    "source": source,
                     "event_count": events.len(),
                     "events": events,
                 });
                 let export_json = serde_json::to_string_pretty(&export)?;
                 if let Some(out) = output {
+                    validate_trace_export_output_path(&out)?;
                     std::fs::write(&out, export_json)?;
                     println!("Trace exported to {}", out);
                 } else {
@@ -5373,6 +5529,37 @@ mod tests {
 
         assert_eq!(haiku, 6.0);
         assert_eq!(sonnet, 18.0);
+    }
+
+    #[test]
+    fn ui_launch_lines_include_loopback_url_and_no_open_state() {
+        let info = mimir_server::UiServerInfo {
+            base_url: "http://127.0.0.1:49152".to_string(),
+            token: "ui-test-token".to_string(),
+        };
+
+        let lines = ui_launch_lines(&info, true).join("\n");
+
+        assert!(lines.contains("http://127.0.0.1:49152/?token=ui-test-token"));
+        assert!(lines.contains("Mimir Studio API: http://127.0.0.1:49152"));
+        assert!(lines.contains("--no-open"));
+        assert!(!lines.contains("ANTHROPIC_API_KEY"));
+        assert!(!lines.contains("sk-123456789012345678901234"));
+    }
+
+    #[test]
+    fn ui_launch_lines_do_not_print_raw_token_separately() {
+        let info = mimir_server::UiServerInfo {
+            base_url: "http://127.0.0.1:3000".to_string(),
+            token: "ui-test-token".to_string(),
+        };
+
+        let lines = ui_launch_lines(&info, false);
+
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("Mimir Studio: "));
+        assert!(lines[1].starts_with("Mimir Studio API: "));
+        assert!(!lines.iter().any(|line| line.starts_with("UI token:")));
     }
 
     #[test]

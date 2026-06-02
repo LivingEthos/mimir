@@ -2,10 +2,102 @@
 
 ## Current Status
 
-**Version:** v1.0.0 production-readiness hardening in progress
-**Branch:** phase6/memory-server-tui
-**Tests:** full `./scripts/validate-production.sh` passing locally after eval and packaging-guard updates
-**Commits:** current branch has Phase 7 cleanup commits plus this uncommitted hardening bucket
+**Version:** v1.0.0 production-readiness hardening
+**Branch:** phase7/v1-exit-gates (off `phase7/override-audit-and-injection`)
+**Tests:** 531 pass / 0 fail (`cargo test --workspace --all-targets`); fmt + workspace clippy `-D warnings` clean; `./scripts/validate-production.sh` green
+**Commits:** all work committed; working tree clean. Every `18-DEFINITION-OF-DONE.md` exit gate is ticked except `v1.0.0` tag on green CI (needs GitHub write access + CI on the release commit).
+
+## v1.0 Exit-Gate Slices - 2026-06-02
+
+Branch `phase7/v1-exit-gates` (off `phase6/memory-server-tui`). Four exit-gate
+workstreams landed; all changes are test/doc/bench, no runtime behavior change.
+
+- **Perf-bench harness.** Five criterion benches now exist with real `[[bench]]`
+  `harness = false` entries: `packet_build` (mimir-context), `repo_index`
+  (mimir-index), `token_count` (mimir-providers), `init_and_doctor`
+  (mimir-session), `render_frame` (mimir-tui). `bench/baselines.json` now carries
+  measured criterion medians (no longer hand-written), and `docs/perf.md` maps
+  each metric to its bench id with directly-measured vs representative-corpus
+  caveats. Two guards: deterministic `crates/mimir-core/tests/perf_regression.rs`
+  (CI-safe, asserts every baseline <= target without timing) and the slow
+  `scripts/check-perf-regression.sh` (real benches, 20% regression gate). Closes
+  the perf-bench gap flagged in the 2026-06-01 note.
+- **Security / compliance test gates.** Cap-compliance gate
+  `crates/mimir-eval/tests/cap_compliance.rs` runs the 15-case
+  `context-recall-v1` fixture across modes 0,2,3,4,5 and asserts every packet
+  stays at or below the 64000-token cap. The redactor `PATTERNS` array is **19**
+  (stale docs said 18, now corrected everywhere); `test_redactor_corpus_covers_every_pattern`
+  keeps the corpus 1:1 with the array. Outbound-redaction tests
+  (`crates/mimir-cli/tests/outbound_redaction.rs`) assert
+  `provider_request.redacted.json` carries `<REDACTED:...>` markers, never the
+  planted secret. A dependency-free Rust gateway-boundary test
+  (`crates/mimir-providers/tests/gateway_boundary.rs`) asserts only
+  `mimir-providers` imports an HTTP client; `scripts/check-gateway-boundary.sh`
+  is wired into `.github/workflows/ci.yml`. Risk regressions: R-01 recall-guard,
+  R-02 token-drift (`token_drift_calibration.rs`), R-14 memory-pollution
+  (`safe_to_send=false`).
+- **User-journey DOD tests + context inspect enhancement.** New end-to-end
+  journey tests `journey_ask_code.rs` (ask/code against an in-process mock
+  provider) and `journey_init_doctor.rs` (provider-free init/doctor scaffold).
+  `mimir context inspect` now emits included items with line ranges and omitted
+  candidates with their `reason_for_omission`, in both text and `--json`
+  (`crates/mimir-cli/tests/context_inspect.rs`).
+- **Docs completeness.** Three new ADRs landed — ADR-006 (fail-closed editing),
+  ADR-007 (override auto-grant after repeated failures), ADR-008 (secret
+  redaction) — bringing the named-topic set to five (003 gateway boundary, 002
+  schema-as-contract, 006, 007, 008). `CHANGELOG.md` Unreleased section is
+  current, and `docs/{cli-exit-codes,providers,security,perf}.md` are all present
+  and grounded in current code (exit codes 0/1/2 only, with the 3–16/64/70/…
+  scheme marked reserved/planned). The `V1.0-ROADMAP.md` exit gate "5 ADRs,
+  CHANGELOG, docs complete" is now ticked.
+- **Two more gates locked + perf/eval ticks.** `crates/mimir-schemas/tests/p0_schemas.rs`
+  compiles every schema as JSON Schema 2020-12 (cross-`$ref` via an in-memory,
+  network-free registry) and validates all 25 examples 1:1 ("All P0 schemas
+  validate"). `crates/mimir-cli/tests/prompt_replay.rs` asserts `packet replay
+  <run-id> --request-json` is byte-identical to the persisted
+  `provider_request.redacted.json` for ask/plan/code/context-call ("All prompts
+  replayable from local artifacts"). "Performance targets met" and "Eval: 15+
+  fixtures, modes 0,2,3,4,5" are also ticked (the latter locked by
+  `cap_compliance.rs`). **Net result: every exit gate is ticked except `v1.0.0`
+  tag on green CI**, which needs GitHub write access + CI on the release commit.
+  Final: 531 tests pass, fmt + workspace clippy clean, `validate-production.sh`
+  green.
+
+## Override Audit, Prompt-Injection, and Security Slices - 2026-06-01
+
+Branch `phase7/override-audit-and-injection` (off `phase6/memory-server-tui`).
+
+- **`override request` now logs grants (DOD met).** Every request appends a
+  redacted `override_requested` audit event to the run's `events.jsonl`
+  (requested cap, reason, requester, threshold, prior failures). The
+  `--auto-grant-after` threshold has real semantics, driven through
+  `mimir-review`'s `OverrideManager`: prior failed attempts are counted from a
+  run's `events.jsonl` (attach with `--run-id`; a fresh run starts at zero), and
+  when the count meets the threshold a new `OverrideGrant` artifact
+  (`override_grant.json`) plus a redacted `override_granted` event are written
+  (`granted_by=auto_after_failures`). Added the `OverrideGrant` schema, example,
+  generated Rust type, and SDK mirror. Auto-grant trigger: `prior_failures >=
+  auto_grant_after` (so `--auto-grant-after 0` grants immediately). Failure event
+  types counted: `cost_cap_aborted`, `repair_cost_cap_preflight_exceeded`,
+  `patch_rejected`, `repair_patch_rejected`, `patch_tests_failed`,
+  `override_attempt_failed`.
+- **Prompt-injection containment test (DOD R-12 met).** New fixture
+  `fixtures/prompt-injection/poisoned-context.md` and
+  `crates/mimir-cli/tests/prompt_injection.rs` drive `mimir code` through the
+  localhost-mock provider with a compromised model that obeys an injected
+  "ignore previous instructions" payload and targets a path outside the
+  `--editable` set, a `../` escape, and an absolute path. All three fail closed:
+  injection reaches the model yet no out-of-set file is mutated and the run exits
+  non-zero.
+- **Two security slices.** `read_shared_packet_bundle` now rejects symlinks /
+  non-regular files and caps on-disk size; `trace export --redact` now scrubs
+  local filesystem paths (via new `mimir_runs::redact_trace_paths`) and refuses
+  to write `--output` through a symlink.
+- **Toolchain note:** clippy 1.95 promoted `get_first` / `manual_repeat_n` to
+  deny-level; cleared three pre-existing lints (mimir-index, mimir-server test)
+  so `cargo clippy --workspace --all-targets -- -D warnings` passes.
+- **Still open (out of scope here):** the perf-bench gap — `bench/baselines.json`
+  is hand-written static numbers with no `[[bench]]`/criterion harness.
 
 ## Agent Entry Point Update - 2026-05-23
 
@@ -33,7 +125,7 @@
 - `npm pack --dry-run --json` passes for the private `@mimir/sdk`, all five private `@mimir/cli-*` platform packages, and private root `@mimir/cli`.
 - Homebrew formula checksums are populated for all macOS/Linux archives; `update-homebrew-checksums.mjs --check` and strict platform verification both pass against `target/distrib/`.
 - `scripts/stage-npm-platform-package.mjs` now rejects missing flag values and unknown arguments instead of falling back to host defaults.
-- npm registry publication is disabled by policy. The canonical GitHub repository is now `LivingEthos/mimir`; package metadata, Homebrew URLs, and release tooling are attached to it. Mimir is source-visible under the Mimir Public Source License, not Apache-2.0.
+- npm registry publication is disabled by policy. The canonical GitHub repository is now `MisterWonderful/mimir`; local `origin`, package metadata, Homebrew URLs, and release tooling have been reattached to it. The stale local `v1.0.0` tag that pointed at `136771a` has been deleted so it cannot be pushed accidentally.
 
 ## Completed Phases
 
@@ -126,7 +218,7 @@ Per 15-PHASES.md:
    - `mimir-cli`, private `@mimir/cli`, private `@mimir/sdk`, private Node platform-package manifests, and Homebrew artifact URL names are aligned to v1.0.0 / cargo-dist `mimir-cli-*` artifacts.
    - All five native platform packages have staged binaries and pass `npm pack --dry-run`.
    - Homebrew checksums match the local macOS/Linux cargo-dist archives.
-   - Remaining release work: run CI on the exact source-visible release commit, ensure no public tag/release points at superseded Apache-2.0 metadata, upload GitHub release assets, and then run Homebrew smoke checks against the live asset URLs.
+   - Remaining release work: push from a GitHub account with write access, run CI on the exact release commit, create the `v1.0.0` tag, upload GitHub release assets, and then run Homebrew smoke checks against the live asset URLs.
 
 6. **Context sharing / packet replay** — portable replay bundles now wired
    - `mimir packet share <run-id>` writes a redacted `mimir.packet_share` bundle by default, with the schema-valid packet plus the redacted provider request and checksums.
@@ -141,7 +233,7 @@ Per 15-PHASES.md:
    - The command writes schema-valid `EvalResult` arrays under `.mimir/evals/` and prints aggregate recall, precision, cap compliance, and whether mode 4 beats mode 0 on mean file recall.
    - Current local release-binary smoke reports cap compliance and mode 4 beating mode 0, with partial full-recall case pass counts still visible in the summary.
 
-8. **Tag v1.0.0** — release tag must point at the source-visible license commit before public release assets are exposed
+8. **Tag v1.0.0** — pending GitHub release assets, Homebrew live-URL smoke checks, and green CI on the release commit
 
 9. **Agent workflow productization** — provider-free entry points now wired
    - `init`, `context suggest`, `check`, and `explore` expose the large-codebase workflow as reusable CLI features.
@@ -194,7 +286,7 @@ mimir check --ci
 - Parent handoff/spec docs still contain older command names in places; `docs/context-packets.md` and the CLI help reflect the current packet lifecycle.
 - Code-mode `.mimir/commands/*.md` recipes are executable through `mimir code --recipe`; seeded ask-mode validation recipes are still documented workflow material until an ask/validation recipe runner is added.
 - `mimir explore` uses deterministic read-only local search evidence; richer provider-backed exploration remains future work.
-- Full production validation passes locally; final release still needs green CI on the exact source-visible release commit, a correct public `v1.0.0` tag, uploaded GitHub release assets, and Homebrew smoke checks against the live asset URLs.
+- Full production validation passes locally; final release still needs GitHub write access, green CI on the exact release commit, a new correct `v1.0.0` tag, uploaded GitHub release assets, and Homebrew smoke checks against the live asset URLs.
 
 ## Handoff Instructions
 To continue development:

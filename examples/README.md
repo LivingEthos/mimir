@@ -26,6 +26,7 @@ Hermes uses these to:
 | `executable-patch-plan.example.json` | `ExecutablePatchPlan.schema.json` |
 | `plan-artifact.example.json` | `PlanArtifact.schema.json` |
 | `override-request.example.json` | `OverrideRequest.schema.json` |
+| `override-grant.example.json` | `OverrideGrant.schema.json` |
 | `eval-case.example.yaml` | `EvalCase.schema.json` (YAML form) |
 | `audit-event.example.json` | `AuditEvent.schema.json` |
 | `error.example.json` | `Error.schema.json` |

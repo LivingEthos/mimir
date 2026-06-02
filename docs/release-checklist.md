@@ -13,12 +13,12 @@ The eval command writes schema-valid `EvalResult` entries under `.mimir/evals/`.
 
 ## Distribution Staging
 
-Current release stance: Mimir is source-visible under the Mimir Public Source
-License, with the canonical repository at `LivingEthos/mimir`. cargo-dist
-archives exist in `target/distrib/` for all five configured targets, all five
-native binaries are staged into private Node platform packages, Homebrew
-macOS/Linux checksums match the local archives, and all Node package pack
-dry-runs pass. npm registry publication is disabled by policy.
+Current local staging state: cargo-dist archives exist in `target/distrib/` for
+all five configured targets, all five native binaries are staged into their
+private Node platform packages, Homebrew macOS/Linux checksums match the local archives, and
+all Node package pack dry-runs pass. npm registry publication is disabled by
+policy. External tag/release still requires GitHub write access and green CI on
+the exact release commit.
 
 1. Verify release metadata alignment before staging binaries:
 
@@ -80,10 +80,9 @@ node scripts/verify-platform-package.mjs --all --require-platform-binaries
 ## External Release Runbook
 
 Do not create release tags or GitHub releases from a dirty, unvalidated, or
-read-only-authenticated workspace. Do not expose a public release/tag whose
-source archive contains superseded permissive license metadata. npm registry
-publication is not part of the release process; the packages under `packages/`
-are private and are kept only for local pack/install smoke tests.
+read-only-authenticated workspace. npm registry publication is not part of the
+release process; the packages under `packages/` are private and are kept only for
+local pack/install smoke tests.
 
 1. Confirm credentials and exact release state:
 
@@ -94,10 +93,10 @@ git status --short --branch
 git rev-parse HEAD
 git rev-parse v1.0.0 || true
 git push --dry-run origin HEAD
-gh release view v1.0.0 --repo LivingEthos/mimir || true
+gh release view v1.0.0 --repo MisterWonderful/mimir || true
 ```
 
-Proceed only when GitHub push dry-run succeeds for `LivingEthos/mimir`, the release
+Proceed only when GitHub push dry-run succeeds for `MisterWonderful/mimir`, the release
 commit is clean, and CI is green for that exact commit. If a local or remote
 `v1.0.0` tag already exists at another commit, stop and get explicit retagging
 approval before deleting or moving it.
@@ -154,7 +153,7 @@ gh release create v1.0.0 \
   target/distrib/mimir-cli-x86_64-unknown-linux-gnu.tar.xz.sha256 \
   target/distrib/mimir-cli-x86_64-pc-windows-msvc.zip \
   target/distrib/mimir-cli-x86_64-pc-windows-msvc.zip.sha256 \
-  --repo LivingEthos/mimir \
+  --repo MisterWonderful/mimir \
   --title "Mimir v1.0.0" \
   --notes-file docs/release-notes-v1.0.0.md
 ```
@@ -162,7 +161,7 @@ gh release create v1.0.0 \
 6. Verify public package and release visibility:
 
 ```bash
-gh release view v1.0.0 --repo LivingEthos/mimir
+gh release view v1.0.0 --repo MisterWonderful/mimir
 ```
 
 7. Run Homebrew formula audit/install smoke tests only after the GitHub release

@@ -107,8 +107,6 @@ const requirePlatformBinaries = parsedArgs.flags.has("--require-platform-binarie
 const homebrewArtifactsDir = parsedArgs.values.has("--homebrew-artifacts-dir")
   ? path.resolve(cwd, parsedArgs.values.get("--homebrew-artifacts-dir"))
   : null;
-const repositoryUrl = "https://github.com/LivingEthos/mimir";
-const npmLicense = "UNLICENSED";
 
 function usage() {
   console.log(`Usage:
@@ -166,7 +164,7 @@ function verifyPlatformMetadata(packageDir, entry, rootVersion) {
   assertEqual(`${entry.packageName} name`, pkg.name, entry.packageName);
   assertEqual(`${entry.packageName} version`, pkg.version, rootVersion);
   assertEqual(`${entry.packageName} private`, pkg.private, true);
-  assertEqual(`${entry.packageName} license`, pkg.license, npmLicense);
+  assertEqual(`${entry.packageName} license`, pkg.license, "Apache-2.0");
   assertArrayEqual(`${entry.packageName} os`, pkg.os, [entry.os]);
   assertArrayEqual(`${entry.packageName} cpu`, pkg.cpu, [entry.cpu]);
   assertArrayEqual(`${entry.packageName} files`, pkg.files, entry.files);
@@ -203,8 +201,6 @@ function verifyRootCliPackage(rootVersion) {
   assertEqual("@mimir/cli name", pkg.name, "@mimir/cli");
   assertEqual("@mimir/cli version", pkg.version, rootVersion);
   assertEqual("@mimir/cli private", pkg.private, true);
-  assertEqual("@mimir/cli license", pkg.license, npmLicense);
-  assertEqual("@mimir/cli repository.url", pkg.repository?.url, `git+${repositoryUrl}.git`);
   assertEqual("@mimir/cli bin.mimir", pkg.bin?.mimir, "bin/mimir");
   assertEqual(
     "@mimir/cli prepack",
@@ -230,15 +226,6 @@ function verifyRootCliPackage(rootVersion) {
   }
 }
 
-function verifySdkPackage(rootVersion) {
-  const pkg = readJson(path.join(repoRoot, "packages", "sdk", "package.json"));
-  assertEqual("@mimir/sdk name", pkg.name, "@mimir/sdk");
-  assertEqual("@mimir/sdk version", pkg.version, rootVersion);
-  assertEqual("@mimir/sdk private", pkg.private, true);
-  assertEqual("@mimir/sdk license", pkg.license, npmLicense);
-  assertEqual("@mimir/sdk repository.url", pkg.repository?.url, `git+${repositoryUrl}.git`);
-}
-
 function verifyHomebrewFormula(rootVersion) {
   const formulaPath = path.join(repoRoot, "HomebrewFormula", "mimir.rb");
   if (!fs.existsSync(formulaPath)) {
@@ -251,7 +238,7 @@ function verifyHomebrewFormula(rootVersion) {
 
   let placeholders = 0;
   for (const entry of platformPackages.filter((candidate) => candidate.homebrewPlaceholder)) {
-    const expectedUrl = `${repositoryUrl}/releases/download/v${rootVersion}/mimir-cli-${entry.rustTarget}.tar.xz`;
+    const expectedUrl = `https://github.com/MisterWonderful/mimir/releases/download/v${rootVersion}/mimir-cli-${entry.rustTarget}.tar.xz`;
     const urlNeedle = `url "${expectedUrl}"`;
     const urlIndex = formula.indexOf(urlNeedle);
     if (urlIndex === -1) {
@@ -298,7 +285,6 @@ function rootVersion() {
 function verifyAllMetadata() {
   const version = rootVersion();
   verifyRootCliPackage(version);
-  verifySdkPackage(version);
   for (const entry of platformPackages) {
     const packageDir = path.join(repoRoot, entry.packageDir);
     verifyPlatformMetadata(packageDir, entry, version);

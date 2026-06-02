@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -85,9 +86,21 @@ pub fn run_context_dataset(path: impl AsRef<Path>, cap_tokens: u32) -> Result<Co
     let path = path.as_ref();
     let dataset = load_context_dataset(path)?;
     let dataset_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut repo_indexes = RepoIndexCache::default();
     let mut results = Vec::with_capacity(dataset.cases.len());
     for case in &dataset.cases {
-        results.push(run_context_case(case, dataset_dir, cap_tokens)?);
+        let start = Instant::now();
+        let repo_root = resolve_repo_path(dataset_dir, &case.repo_path);
+        let repo_lookup = repo_indexes.get_or_build(&repo_root)?;
+        results.push(run_context_case_with_index(
+            case,
+            &repo_root,
+            repo_lookup.index,
+            cap_tokens,
+            start,
+            Some(repo_lookup.build_latency_ms),
+            repo_lookup.metrics.index_cache_hit_rate(),
+        )?);
     }
     let summary = summarize_results(&dataset.id, &results);
     Ok(ContextEvalRun { summary, results })
@@ -101,6 +114,31 @@ pub fn run_context_case(
 ) -> Result<EvalResult> {
     let start = Instant::now();
     let repo_root = resolve_repo_path(dataset_dir, &case.repo_path);
+    let index_start = Instant::now();
+    let repo_index = Arc::new(
+        mimir_index::build_index(&repo_root)
+            .with_context(|| format!("failed to build repo index for {}", repo_root.display()))?,
+    );
+    run_context_case_with_index(
+        case,
+        &repo_root,
+        repo_index,
+        cap_tokens,
+        start,
+        Some(saturating_millis(index_start.elapsed().as_millis())),
+        None,
+    )
+}
+
+fn run_context_case_with_index(
+    case: &EvalCase,
+    repo_root: &Path,
+    repo_index: Arc<mimir_index::RepoIndex>,
+    cap_tokens: u32,
+    start: Instant,
+    repo_map_refresh_latency_ms: Option<u32>,
+    index_cache_hit_rate: Option<f64>,
+) -> Result<EvalResult> {
     let run_id = RunId::generate();
     let packet = ContextBuilder::new()
         .run_id(run_id.clone())
@@ -108,7 +146,8 @@ pub fn run_context_case(
         .mode(&case.allowed_mode)
         .provider(DEFAULT_PROVIDER)
         .model(DEFAULT_MODEL)
-        .repo_root(&repo_root)
+        .repo_root(repo_root)
+        .repo_index(repo_index)
         .edit_targets(case.gold.files.clone())
         .build()
         .with_context(|| format!("failed to build context packet for {}", case.id))?;
@@ -117,7 +156,72 @@ pub fn run_context_case(
         &packet,
         cap_tokens,
         start.elapsed().as_millis(),
+        repo_map_refresh_latency_ms,
+        index_cache_hit_rate,
     ))
+}
+
+#[derive(Default)]
+struct RepoIndexCache {
+    indexes: BTreeMap<PathBuf, Arc<mimir_index::RepoIndex>>,
+    metrics: RepoIndexCacheMetrics,
+}
+
+#[derive(Clone, Debug, Default)]
+struct RepoIndexCacheMetrics {
+    lookups: u32,
+    hits: u32,
+    misses: u32,
+    build_latency_ms: u32,
+}
+
+impl RepoIndexCacheMetrics {
+    fn index_cache_hit_rate(&self) -> Option<f64> {
+        if self.lookups == 0 {
+            None
+        } else {
+            Some(self.hits as f64 / self.lookups as f64)
+        }
+    }
+}
+
+struct RepoIndexCacheLookup {
+    index: Arc<mimir_index::RepoIndex>,
+    build_latency_ms: u32,
+    metrics: RepoIndexCacheMetrics,
+}
+
+impl RepoIndexCache {
+    fn get_or_build(&mut self, repo_root: &Path) -> Result<RepoIndexCacheLookup> {
+        let cache_key = repo_index_cache_key(repo_root);
+        if let Some(index) = self.indexes.get(&cache_key) {
+            self.metrics.lookups = self.metrics.lookups.saturating_add(1);
+            self.metrics.hits = self.metrics.hits.saturating_add(1);
+            return Ok(RepoIndexCacheLookup {
+                index: Arc::clone(index),
+                build_latency_ms: 0,
+                metrics: self.metrics.clone(),
+            });
+        }
+        let build_start = Instant::now();
+        let index =
+            Arc::new(mimir_index::build_index(repo_root).with_context(|| {
+                format!("failed to build repo index for {}", repo_root.display())
+            })?);
+        let build_latency_ms = saturating_millis(build_start.elapsed().as_millis());
+        self.indexes.insert(cache_key, Arc::clone(&index));
+        self.metrics.lookups = self.metrics.lookups.saturating_add(1);
+        self.metrics.misses = self.metrics.misses.saturating_add(1);
+        self.metrics.build_latency_ms = self
+            .metrics
+            .build_latency_ms
+            .saturating_add(build_latency_ms);
+        Ok(RepoIndexCacheLookup {
+            index,
+            build_latency_ms,
+            metrics: self.metrics.clone(),
+        })
+    }
 }
 
 fn resolve_repo_path(dataset_dir: &Path, repo_path: &str) -> PathBuf {
@@ -135,11 +239,21 @@ fn resolve_repo_path(dataset_dir: &Path, repo_path: &str) -> PathBuf {
     }
 }
 
+fn repo_index_cache_key(repo_root: &Path) -> PathBuf {
+    repo_root.to_path_buf()
+}
+
+fn saturating_millis(elapsed_ms: u128) -> u32 {
+    elapsed_ms.min(u32::MAX as u128) as u32
+}
+
 fn result_from_packet(
     case: &EvalCase,
     packet: &ContextPacket,
     cap_tokens: u32,
     elapsed_ms: u128,
+    repo_map_refresh_latency_ms: Option<u32>,
+    index_cache_hit_rate: Option<f64>,
 ) -> EvalResult {
     let expected_files = case.gold.files.iter().cloned().collect::<BTreeSet<_>>();
     let included_files = packet
@@ -166,7 +280,7 @@ fn result_from_packet(
     } else {
         Some(packet.estimated_input_tokens as f64 / useful_lines as f64)
     };
-    let elapsed_ms = elapsed_ms.min(u32::MAX as u128) as u32;
+    let elapsed_ms = saturating_millis(elapsed_ms);
 
     EvalResult {
         schema_version: 1,
@@ -185,7 +299,7 @@ fn result_from_packet(
             token_count_agreement_p95: None,
             packet_build_latency_ms: Some(elapsed_ms),
             retrieval_latency_ms: Some(elapsed_ms),
-            repo_map_refresh_latency_ms: Some(0),
+            repo_map_refresh_latency_ms,
             e2e_latency_ms: elapsed_ms,
             tokens_in_total: packet.estimated_input_tokens,
             tokens_out_total: 0,
@@ -194,7 +308,7 @@ fn result_from_packet(
             override_used: Some(false),
             outcome: None,
             total_cost_to_success: None,
-            index_cache_hit_rate: None,
+            index_cache_hit_rate,
             prompt_cache_hit_rate: None,
         },
         packet_id: Some(packet.packet_id.clone()),
@@ -370,6 +484,131 @@ mod tests {
         assert_eq!(result.schema_version, 1);
         assert_eq!(result.mode, "0-baseline");
         assert!(result.metrics.cap_compliance);
+    }
+
+    #[test]
+    fn repo_index_cache_reuses_resolved_repo_path() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "pub fn cached() {}\n").unwrap();
+        let other_dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(other_dir.path().join("src")).unwrap();
+        std::fs::write(
+            other_dir.path().join("src/lib.rs"),
+            "pub fn independently_cached() {}\n",
+        )
+        .unwrap();
+
+        let mut cache = RepoIndexCache::default();
+        let first = cache.get_or_build(dir.path()).unwrap();
+        let second = cache.get_or_build(dir.path()).unwrap();
+        let third = cache.get_or_build(other_dir.path()).unwrap();
+
+        assert!(Arc::ptr_eq(&first.index, &second.index));
+        assert!(!Arc::ptr_eq(&first.index, &third.index));
+        assert_eq!(cache.indexes.len(), 2);
+        assert_eq!(third.metrics.lookups, 3);
+        assert_eq!(third.metrics.hits, 1);
+        assert_eq!(third.metrics.misses, 2);
+        assert_eq!(third.metrics.index_cache_hit_rate(), Some(1.0 / 3.0));
+        assert!(first.index.get("src/lib.rs").is_some());
+    }
+
+    #[test]
+    fn repo_index_cache_sanitizes_artifacts_before_reuse() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::create_dir_all(dir.path().join("dist")).unwrap();
+        std::fs::create_dir_all(dir.path().join("packages/cli-linux-x64")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "pub fn cached() {}\n").unwrap();
+        std::fs::write(
+            dir.path().join("dist/generated.rs"),
+            "pub fn generated_artifact() {}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("packages/cli-linux-x64/package.json"),
+            "{\"name\":\"@mimir/cli-linux-x64\"}\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("src/nul.rs"), b"pub fn nul_source() {}\0").unwrap();
+        std::fs::write(dir.path().join("invalid_utf8.rs"), b"pub fn nope() {}\xff").unwrap();
+        std::fs::write(
+            dir.path().join("huge.rs"),
+            "x".repeat(mimir_index::MAX_INDEXED_FILE_BYTES as usize + 1),
+        )
+        .unwrap();
+
+        let mut cache = RepoIndexCache::default();
+        let first = cache.get_or_build(dir.path()).unwrap();
+        let second = cache.get_or_build(dir.path()).unwrap();
+
+        assert!(Arc::ptr_eq(&first.index, &second.index));
+        assert!(first.index.get("src/lib.rs").is_some());
+        assert!(first.index.get("dist/generated.rs").is_none());
+        assert!(first
+            .index
+            .get("packages/cli-linux-x64/package.json")
+            .is_none());
+        assert!(first.index.get("src/nul.rs").is_none());
+        assert!(first.index.get("invalid_utf8.rs").is_none());
+        assert!(first.index.get("huge.rs").is_none());
+    }
+
+    #[test]
+    fn run_context_dataset_reports_index_cache_metrics() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let fixture_repo = temp.path().join("repo");
+        std::fs::create_dir_all(fixture_repo.join("src")).unwrap();
+        std::fs::write(
+            fixture_repo.join("src/lib.rs"),
+            "pub fn cached_context() -> &'static str { \"cached\" }\n",
+        )
+        .unwrap();
+        let dataset = temp.path().join("eval.yaml");
+        std::fs::write(
+            &dataset,
+            format!(
+                r#"schema_version: 1
+id: cache-metrics
+description: Cache metrics fixture.
+cases:
+  - schema_version: 1
+    id: first
+    repo_path: "{}"
+    base_commit: synthetic
+    task: Explain cached_context
+    gold:
+      files: [src/lib.rs]
+      ranges:
+        - {{ path: src/lib.rs, start: 1, end: 1 }}
+    allowed_mode: ask
+    allowed_caps_to_test: [64000]
+  - schema_version: 1
+    id: second
+    repo_path: "{}"
+    base_commit: synthetic
+    task: Explain cached_context again
+    gold:
+      files: [src/lib.rs]
+      ranges:
+        - {{ path: src/lib.rs, start: 1, end: 1 }}
+    allowed_mode: ask
+    allowed_caps_to_test: [64000]
+"#,
+                fixture_repo.display(),
+                fixture_repo.display()
+            ),
+        )
+        .unwrap();
+
+        let run = run_context_dataset(&dataset, DEFAULT_CAP_TOKENS).unwrap();
+
+        assert_eq!(run.results.len(), 2);
+        assert_eq!(run.results[0].metrics.index_cache_hit_rate, Some(0.0));
+        assert_eq!(run.results[1].metrics.index_cache_hit_rate, Some(0.5));
+        assert!(run.results[0].metrics.repo_map_refresh_latency_ms.is_some());
+        assert_eq!(run.results[1].metrics.repo_map_refresh_latency_ms, Some(0));
     }
 
     #[test]

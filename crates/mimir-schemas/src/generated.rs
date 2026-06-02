@@ -497,7 +497,10 @@ pub enum PatchStep {
 
 #[cfg(test)]
 mod patch_plan_tests {
-    use super::{ExecutablePatchPlan, PatchEditKind, PatchPlan, PatchStep, PlanArtifact};
+    use super::{
+        ExecutablePatchPlan, OverrideGrant, PatchEditKind, PatchPlan, PatchStep, PlanArtifact,
+        TraceSpan, TraceSpanEvent, TraceSpanKind, TraceSpanStatus, TraceSpanStatusCode,
+    };
 
     fn assert_example_validates(schema_json: &str, example_json: &str) {
         let schema: serde_json::Value = serde_json::from_str(schema_json).unwrap();
@@ -640,6 +643,78 @@ mod patch_plan_tests {
         });
         assert!(serde_json::from_value::<ExecutablePatchPlan>(extra_step_field).is_err());
     }
+
+    #[test]
+    fn trace_span_rust_type_matches_schema_shape() {
+        let span = TraceSpan {
+            schema_version: 1,
+            span_id: "0123456789abcdef".to_string(),
+            trace_id: Some("0123456789abcdef0123456789abcdef".to_string()),
+            parent_id: None,
+            name: "mimir.context.build".to_string(),
+            kind: Some(TraceSpanKind::Internal),
+            start_us: 1,
+            end_us: 2,
+            attrs: Some(serde_json::json!({"packet_id": "pkt-example"})),
+            events: Some(vec![TraceSpanEvent {
+                at_us: 2,
+                name: "packet.persisted".to_string(),
+                attrs: None,
+            }]),
+            status: Some(TraceSpanStatus {
+                code: Some(TraceSpanStatusCode::Ok),
+                message: None,
+            }),
+        };
+        let value = serde_json::to_value(span).unwrap();
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../../../schemas/TraceSpan.schema.json")).unwrap();
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        let errors = validator
+            .iter_errors(&value)
+            .map(|error| error.to_string())
+            .collect::<Vec<_>>();
+
+        assert!(errors.is_empty(), "schema validation failed: {errors:#?}");
+        assert!(value.get("start").is_none());
+        assert!(value.get("attributes").is_none());
+    }
+
+    #[test]
+    fn deserializes_override_grant_example() {
+        assert_example_validates(
+            include_str!("../../../schemas/OverrideGrant.schema.json"),
+            include_str!("../../../examples/override-grant.example.json"),
+        );
+
+        let grant: OverrideGrant = serde_json::from_str(include_str!(
+            "../../../examples/override-grant.example.json"
+        ))
+        .unwrap();
+        assert_eq!(grant.schema_version, 1);
+        assert_eq!(grant.granted_by, "auto_after_failures");
+        assert_eq!(grant.prior_failures, 3);
+        assert_eq!(grant.auto_grant_after, 3);
+    }
+
+    #[test]
+    fn override_grant_schema_rejects_unknown_granted_by() {
+        assert_example_rejected(
+            include_str!("../../../schemas/OverrideGrant.schema.json"),
+            serde_json::json!({
+                "schema_version": 1,
+                "grant_id": "grant-1",
+                "request_id": "ovr-1",
+                "run_id": "20260518-141522-a3f9b2c1",
+                "granted_cap": 128000,
+                "reason": "test",
+                "granted_by": "totally_not_allowed",
+                "prior_failures": 3,
+                "auto_grant_after": 3,
+                "granted_at": "2026-05-18T14:30:14Z"
+            }),
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -661,13 +736,65 @@ pub struct AuditEvent {
 
 /// A trace span.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TraceSpan {
+    pub schema_version: u32,
     pub span_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
     pub name: String,
-    pub start: String,
-    pub end: Option<String>,
-    pub attributes: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<TraceSpanKind>,
+    pub start_us: u64,
+    pub end_us: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attrs: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events: Option<Vec<TraceSpanEvent>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<TraceSpanStatus>,
+}
+
+/// OpenTelemetry span kind.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceSpanKind {
+    Internal,
+    Client,
+    Server,
+    Producer,
+    Consumer,
+}
+
+/// A trace span event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TraceSpanEvent {
+    pub at_us: u64,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attrs: Option<serde_json::Value>,
+}
+
+/// Trace span status.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TraceSpanStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<TraceSpanStatusCode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Trace span status code.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceSpanStatusCode {
+    Unset,
+    Ok,
+    Error,
 }
 
 // ---------------------------------------------------------------------------
@@ -735,6 +862,25 @@ pub struct OverrideRequest {
     pub run_id: String,
     pub reason: String,
     pub requested_by: String,
+}
+
+// ---------------------------------------------------------------------------
+// OverrideGrant
+// ---------------------------------------------------------------------------
+
+/// Recorded grant of an above-default cap override.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OverrideGrant {
+    pub schema_version: u32,
+    pub grant_id: String,
+    pub request_id: String,
+    pub run_id: String,
+    pub granted_cap: u32,
+    pub reason: String,
+    pub granted_by: String,
+    pub prior_failures: u32,
+    pub auto_grant_after: u32,
+    pub granted_at: String,
 }
 
 // ---------------------------------------------------------------------------

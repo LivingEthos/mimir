@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use mimir_runs::RunId;
 use mimir_schemas::{
@@ -18,6 +19,7 @@ pub struct ContextBuilder {
     provider: Option<String>,
     model: Option<String>,
     repo_root: Option<PathBuf>,
+    repo_index: Option<Arc<mimir_index::RepoIndex>>,
     edit_targets: Vec<String>,
 }
 
@@ -75,6 +77,12 @@ impl ContextBuilder {
         self
     }
 
+    /// Reuse a prebuilt repository index for retrieval-backed packet construction.
+    pub fn repo_index(mut self, index: impl Into<Arc<mimir_index::RepoIndex>>) -> Self {
+        self.repo_index = Some(index.into());
+        self
+    }
+
     /// Set explicit edit targets for retrieval sufficiency checks.
     pub fn edit_targets(mut self, targets: Vec<String>) -> Self {
         self.edit_targets = targets;
@@ -107,7 +115,12 @@ impl ContextBuilder {
         let count_drift_reserve_tokens =
             mimir_providers::capabilities::DEFAULT_COUNT_DRIFT_RESERVE_TOKENS;
 
-        let retrieved = build_retrieved_context(self.repo_root, &task_goal, &self.edit_targets)?;
+        let retrieved = build_retrieved_context(
+            self.repo_root,
+            self.repo_index.as_deref(),
+            &task_goal,
+            &self.edit_targets,
+        )?;
         let task_tokens = mimir_providers::count::count_local(&task_goal);
         let estimated_input_tokens = task_tokens
             .saturating_add(retrieved.included_tokens)
@@ -180,6 +193,7 @@ fn normalize_mode(mode: &str) -> String {
 
 fn build_retrieved_context(
     repo_root: Option<PathBuf>,
+    repo_index: Option<&mimir_index::RepoIndex>,
     task_card: &str,
     edit_targets: &[String],
 ) -> Result<RetrievedContext, anyhow::Error> {
@@ -192,9 +206,15 @@ fn build_retrieved_context(
         });
     };
 
-    let index = mimir_index::build_index(&root)?;
+    let owned_index;
+    let index = if let Some(index) = repo_index {
+        index
+    } else {
+        owned_index = mimir_index::build_index(&root)?;
+        &owned_index
+    };
     let config = mimir_retrieval::PipelineConfig::default();
-    let pipeline = mimir_retrieval::run_pipeline(&index, task_card, edit_targets, &config);
+    let pipeline = mimir_retrieval::run_pipeline(index, task_card, edit_targets, &config);
 
     let mut total_tokens = 0u32;
     let mut included = Vec::new();
@@ -215,7 +235,29 @@ fn build_retrieved_context(
         if included_paths.contains(&item.path) {
             continue;
         }
+        if !mimir_index::is_indexable_path(Path::new(&item.path)) {
+            omitted_candidates.push(policy_omission(
+                &item.path,
+                item.estimated_tokens,
+                "generated_file_policy",
+                "Use a source or documentation file instead of generated or packaged artifacts.",
+            ));
+            continue;
+        }
         let path = root.join(&item.path);
+        let metadata = match std::fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        if !mimir_index::is_indexable_file(Path::new(&item.path), metadata.len()) {
+            omitted_candidates.push(policy_omission(
+                &item.path,
+                item.estimated_tokens,
+                "large_file_threshold",
+                "Request this file explicitly with a narrower range or reduce its size.",
+            ));
+            continue;
+        }
         let content = match std::fs::read_to_string(&path) {
             Ok(content) => content,
             Err(_) => continue,
@@ -409,6 +451,29 @@ fn guidance_omission(
     }
 }
 
+fn policy_omission(
+    path: &str,
+    token_count: u32,
+    reason_for_omission: &str,
+    trigger: &str,
+) -> OmittedCandidate {
+    OmittedCandidate {
+        schema_version: 1,
+        path: path.to_string(),
+        ranges: Vec::new(),
+        candidate_kind: "full_file".to_string(),
+        reason_code: "embedding_match".to_string(),
+        score: 0.0,
+        features: serde_json::json!({ "index_policy": 1.0 }),
+        estimated_tokens: token_count,
+        discovered_by: vec!["manifest".to_string()],
+        source_hash: None,
+        reason_for_omission: reason_for_omission.to_string(),
+        risk: None,
+        what_would_trigger_inclusion: trigger.to_string(),
+    }
+}
+
 fn contains_secret_like_text(text: &str) -> bool {
     mimir_security::redact_secrets(text) != text
 }
@@ -526,6 +591,81 @@ mod tests {
         assert_eq!(packet.included[0].path, "ContextBuilder.rs");
         assert!(packet.included[0].tokens > 0);
         assert_eq!(packet.included[0].source_hash.len(), 64);
+    }
+
+    #[test]
+    fn build_uses_supplied_repo_index() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("indexed.rs"),
+            "pub struct IndexedContext;\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("unindexed.rs"), "pub struct GhostMatch;\n").unwrap();
+        std::fs::create_dir_all(dir.path().join("target/debug")).unwrap();
+        std::fs::write(
+            dir.path().join("target/debug/generated.rs"),
+            "pub struct PackagedArtifact;\n",
+        )
+        .unwrap();
+        let oversized_unit = "pub struct OversizedArtifact;\n";
+        let oversized_source = oversized_unit
+            .repeat((mimir_index::MAX_INDEXED_FILE_BYTES as usize / oversized_unit.len()) + 1);
+        std::fs::write(dir.path().join("huge.rs"), oversized_source).unwrap();
+
+        let mut index = mimir_index::RepoIndex::new();
+        index.add(mimir_index::FileEntry {
+            path: "indexed.rs".to_string(),
+            language: "rust".to_string(),
+            content_hash: "indexed".to_string(),
+            token_count: 1,
+            exports: vec!["IndexedContext".to_string()],
+            imports: Vec::new(),
+        });
+        index.add(mimir_index::FileEntry {
+            path: "target/debug/generated.rs".to_string(),
+            language: "rust".to_string(),
+            content_hash: "generated".to_string(),
+            token_count: 1,
+            exports: vec!["PackagedArtifact".to_string()],
+            imports: Vec::new(),
+        });
+        index.add(mimir_index::FileEntry {
+            path: "huge.rs".to_string(),
+            language: "rust".to_string(),
+            content_hash: "huge".to_string(),
+            token_count: 1,
+            exports: vec!["OversizedArtifact".to_string()],
+            imports: Vec::new(),
+        });
+
+        let packet = ContextBuilder::new()
+            .run_id(RunId("20260101-120000-abcdef07".to_string()))
+            .task_card("GhostMatch IndexedContext PackagedArtifact OversizedArtifact")
+            .repo_root(dir.path())
+            .repo_index(Arc::new(index))
+            .provider("glm")
+            .model("glm-5.1")
+            .build()
+            .unwrap();
+
+        assert!(packet.included.iter().any(|item| item.path == "indexed.rs"));
+        assert!(!packet
+            .included
+            .iter()
+            .any(|item| item.path == "unindexed.rs"));
+        assert!(!packet
+            .included
+            .iter()
+            .any(|item| item.path == "target/debug/generated.rs"));
+        assert!(!packet.included.iter().any(|item| item.path == "huge.rs"));
+        assert!(packet.omitted_candidates.iter().any(|item| {
+            item.path == "target/debug/generated.rs"
+                && item.reason_for_omission == "generated_file_policy"
+        }));
+        assert!(packet.omitted_candidates.iter().any(|item| {
+            item.path == "huge.rs" && item.reason_for_omission == "large_file_threshold"
+        }));
     }
 
     #[test]

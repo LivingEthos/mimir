@@ -11,6 +11,7 @@ repository.workspace = true
 mimir-schemas = { path = "../mimir-schemas" }
 mimir-telemetry = { path = "../mimir-telemetry" }
 mimir-context = { path = "../mimir-context" }
+mimir-index = { path = "../mimir-index" }
 mimir-providers = { path = "../mimir-providers" }
 mimir-runs = { path = "../mimir-runs" }
 serde = { workspace = true }
@@ -19,3 +20,6 @@ serde_yaml = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

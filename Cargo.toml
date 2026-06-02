@@ -16,6 +16,7 @@ members = [
     "crates/mimir-runs",
     "crates/mimir-memory",
     "crates/mimir-eval",
+    "crates/mimir-session",
     "crates/mimir-schemas",
     "crates/mimir-server",
     "crates/mimir-tui",
@@ -24,9 +25,9 @@ members = [
 [workspace.package]
 edition = "2021"
 rust-version = "1.83"
-license = "LicenseRef-Mimir-Public-Source"
-authors = ["Living Ethos"]
-repository = "https://github.com/LivingEthos/mimir"
+license = "Apache-2.0"
+authors = ["Mimir contributors"]
+repository = "https://github.com/MisterWonderful/mimir"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

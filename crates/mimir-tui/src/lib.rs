@@ -448,6 +448,29 @@ fn draw_ui(f: &mut Frame, app: &App) {
     f.render_widget(status, chunks[2]);
 }
 
+/// Render one full UI frame into an off-screen [`ratatui::buffer::Buffer`].
+///
+/// This drives the same private [`draw_ui`] path used by the live terminal
+/// loop, but against a [`TestBackend`](ratatui::backend::TestBackend) at the
+/// requested `width`/`height` instead of a real terminal. It performs no I/O,
+/// reads no terminal state, and makes no network calls — it exists so the
+/// render path can be exercised deterministically from tests and benchmarks.
+///
+/// # Panics
+/// Panics if the in-memory [`TestBackend`](ratatui::backend::TestBackend)
+/// fails to draw, which cannot occur for valid (non-zero) dimensions.
+#[must_use]
+pub fn draw_test_frame(app: &App, width: u16, height: u16) -> ratatui::buffer::Buffer {
+    use ratatui::backend::TestBackend;
+
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).expect("TestBackend terminal construction");
+    terminal
+        .draw(|f| draw_ui(f, app))
+        .expect("TestBackend draw should not fail");
+    terminal.backend().buffer().clone()
+}
+
 /// Draw a panel block with optional focus highlight.
 pub fn draw_panel_block(title: &str, area: Rect, is_focused: bool) -> Rect {
     let block = if is_focused {

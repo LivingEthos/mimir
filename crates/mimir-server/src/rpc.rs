@@ -5,13 +5,16 @@
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::session::{SessionId, SessionStore};
-use mimir_context::ContextBuilder;
 use mimir_providers::capabilities::ProviderCapabilitiesList;
 use mimir_schemas::ContextPacket;
+use mimir_session::{
+    build_context_packet as build_session_context_packet, ContextPacketBuildRequest,
+};
 
 /// Custom request: build context for a session.
 pub const WORKSPACE_CONTEXT_GOVERNOR: &str = "workspace/contextGovernor";
@@ -128,12 +131,35 @@ impl MimirServer {
             .and_then(|root| root.as_ref().cloned())
     }
 
-    fn context_builder(&self, task: &str) -> ContextBuilder {
-        let mut builder = ContextBuilder::new().task_card(task);
-        if let Some(root) = self.workspace_root() {
-            builder = builder.repo_root(root);
-        }
-        builder
+    fn workspace_root_utf8(&self) -> anyhow::Result<Option<Utf8PathBuf>> {
+        self.workspace_root()
+            .map(|root| {
+                Utf8PathBuf::from_path_buf(root).map_err(|path| {
+                    anyhow::anyhow!("workspace root is not UTF-8: {}", path.display())
+                })
+            })
+            .transpose()
+    }
+
+    fn build_context_packet(
+        &self,
+        task: String,
+        provider: Option<String>,
+        model: Option<String>,
+    ) -> anyhow::Result<ContextPacket> {
+        let workspace_root = self.workspace_root_utf8()?;
+        let persist = workspace_root.is_some();
+        let built = build_session_context_packet(ContextPacketBuildRequest {
+            task,
+            mode: "ask".to_string(),
+            provider,
+            model,
+            workspace_root,
+            mimir_root: None,
+            edit_targets: Vec::new(),
+            persist,
+        })?;
+        Ok(built.packet)
     }
 
     /// Handle `workspace/contextGovernor`.
@@ -141,14 +167,7 @@ impl MimirServer {
         &self,
         params: ContextGovernorRequest,
     ) -> anyhow::Result<ContextGovernorResponse> {
-        let mut builder = self.context_builder(&params.task);
-        if let Some(p) = params.provider {
-            builder = builder.provider(p);
-        }
-        if let Some(m) = params.model {
-            builder = builder.model(m);
-        }
-        let packet = builder.build()?;
+        let packet = self.build_context_packet(params.task, params.provider, params.model)?;
         Ok(ContextGovernorResponse { packet })
     }
 
@@ -203,14 +222,11 @@ impl MimirServer {
             .sessions
             .get(&id)
             .ok_or_else(|| anyhow::anyhow!("session not found: {}", params.session_id))?;
-        let mut builder = self.context_builder(&params.task);
-        if let Some(ref p) = session.provider {
-            builder = builder.provider(p.clone());
-        }
-        if let Some(ref m) = session.model {
-            builder = builder.model(m.clone());
-        }
-        let packet = builder.build()?;
+        let packet = self.build_context_packet(
+            params.task,
+            session.provider.clone(),
+            session.model.clone(),
+        )?;
         session.context_packet = Some(packet.clone());
         session.touch();
         self.sessions.update(session);

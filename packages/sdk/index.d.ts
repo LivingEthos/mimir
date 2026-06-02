@@ -18,6 +18,7 @@ export * from "./EvidenceSummary";
 export * from "./ExecutablePatchPlan";
 export * from "./MemoryEntry";
 export * from "./OmittedCandidate";
+export * from "./OverrideGrant";
 export * from "./OverrideRequest";
 export * from "./PatchPlan";
 export * from "./PlanArtifact";

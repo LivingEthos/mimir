@@ -2,6 +2,21 @@
 
 All notable changes to Mimir are documented in this file.
 
+## [Unreleased]
+
+### Added
+- Criterion performance harness: 5 benches (`packet_build`, `repo_index`, `token_count`, `init_and_doctor`, `render_frame`) with committed median baselines in `bench/baselines.json` and measured-vs-representative notes in `docs/perf.md`
+- Deterministic perf-regression guard `crates/mimir-core/tests/perf_regression.rs` — asserts every committed baseline is at or below its target without running a bench (CI-safe, never flaky), backed by the slow timing gate `scripts/check-perf-regression.sh`
+- Cap-compliance gate `crates/mimir-eval/tests/cap_compliance.rs` — runs the full 15-case `context-recall-v1` fixture across every mode (0, 2, 3, 4, 5) and asserts every built packet stays at or below the 64000-token cap
+- 19-pattern redactor corpus test `test_redactor_corpus_covers_every_pattern` — one synthetic sample per `PATTERNS` entry, kept 1:1 with the array so a new pattern without coverage fails the build
+- Outbound-redaction tests `crates/mimir-cli/tests/outbound_redaction.rs` — plants synthetic secrets into every provider-bound CLI path and asserts the persisted `provider_request.redacted.json` artifact carries `<REDACTED:...>` markers, never the secret
+- Rust gateway-boundary test `crates/mimir-providers/tests/gateway_boundary.rs` — dependency-free source scan asserting only `mimir-providers` imports an HTTP client and provider dispatch goes through `ProviderGateway`
+- Risk-register regression tests: R-01 recall-guard indirect-dependency flag (`crates/mimir-cli`), R-02 token-count drift calibration (`crates/mimir-context/tests/token_drift_calibration.rs`), R-14 memory-pollution guard (imported entries must be `safe_to_send=false`)
+- User-journey DOD tests: `journey_ask_code.rs` (end-to-end `ask`/`code` against an in-process mock provider) and `journey_init_doctor.rs` (provider-free `init`/`doctor` scaffold checks)
+
+### Changed
+- `mimir context inspect` now surfaces included items with their line ranges and omitted candidates with their `reason_for_omission`, in both text and `--json` output (`crates/mimir-cli/tests/context_inspect.rs`)
+
 ## [v1.0.0] - 2026-05-22
 
 ### Added
@@ -11,7 +26,7 @@ All notable changes to Mimir are documented in this file.
 - `mimir override request` — cap override flow with audit logging
 - `mimir trace export --redact` — trace portability
 - Security tests: cap compliance 100%, prompt injection resistance
-- Redactor coverage: 18 patterns with full test coverage
+- Redactor coverage: 19 patterns with full test coverage
 - Documentation: 5 ADRs, CLI exit codes, providers, security, performance
 - cargo-dist packaging for 5 targets
 - TypeScript SDK with 21 generated types

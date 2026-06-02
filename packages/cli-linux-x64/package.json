@@ -2,20 +2,12 @@
   "name": "@mimir/cli-linux-x64",
   "version": "1.0.0",
   "private": true,
-  "description": "Linux x64 binary for the Mimir context-governed coding CLI",
-  "os": [
-    "linux"
-  ],
-  "cpu": [
-    "x64"
-  ],
-  "files": [
-    "bin/mimir",
-    "mimir",
-    "package.json"
-  ],
+  "description": "Linux x64 binary for @mimir/cli",
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "files": ["bin/mimir", "mimir", "package.json"],
   "scripts": {
     "prepack": "node ../../scripts/verify-platform-package.mjs"
   },
-  "license": "UNLICENSED"
+  "license": "Apache-2.0"
 }

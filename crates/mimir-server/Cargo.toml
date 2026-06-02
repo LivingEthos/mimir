@@ -12,15 +12,26 @@ mimir-schemas = { path = "../mimir-schemas" }
 mimir-core = { path = "../mimir-core" }
 mimir-providers = { path = "../mimir-providers" }
 mimir-context = { path = "../mimir-context" }
+mimir-review = { path = "../mimir-review" }
 mimir-runs = { path = "../mimir-runs" }
+mimir-security = { path = "../mimir-security" }
+mimir-session = { path = "../mimir-session" }
+axum = { version = "0.7", features = ["ws", "json", "tokio", "http1"] }
+camino = { workspace = true, features = ["serde1"] }
+futures = { workspace = true }
+ignore = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tokio = { workspace = true }
 tower-lsp = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 dashmap = { workspace = true }
 anyhow = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+reqwest = { workspace = true }
+tokio-tungstenite = "0.24"

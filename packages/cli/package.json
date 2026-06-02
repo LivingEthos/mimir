@@ -2,7 +2,7 @@
   "name": "@mimir/cli",
   "version": "1.0.0",
   "private": true,
-  "description": "Mimir CLI — context-governed AI coding inside ideal context limits",
+  "description": "Mimir CLI — Replayable Context for coding agents",
   "bin": {
     "mimir": "bin/mimir"
   },
@@ -26,14 +26,13 @@
   "keywords": [
     "cli",
     "ai",
-    "coding-agent",
-    "context-engineering",
-    "context-window",
-    "llm"
+    "context",
+    "llm",
+    "coding"
   ],
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/LivingEthos/mimir.git"
+    "url": "git+https://github.com/MisterWonderful/mimir.git"
   }
 }

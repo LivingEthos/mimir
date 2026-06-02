@@ -2,7 +2,7 @@
   "name": "@mimir/sdk",
   "version": "1.0.0",
   "private": true,
-  "description": "TypeScript schema types for Mimir context-governed coding workflows",
+  "description": "TypeScript types for Mimir CLI schemas",
   "types": "index.d.ts",
   "files": [
     "*.ts",
@@ -20,9 +20,9 @@
     "json-schema-to-typescript": "^15.0.4",
     "typescript": "^5.0.0"
   },
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/LivingEthos/mimir.git"
+    "url": "git+https://github.com/MisterWonderful/mimir.git"
   }
 }

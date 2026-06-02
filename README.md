@@ -1,17 +1,10 @@
 # Mimir
 
-Context-governed coding CLI for more accurate AI edits.
+Replayable Context for coding agents.
 
 ## Overview
 
-Mimir is a coding CLI built around ideal context limits. Instead of sending a
-loose pile of files to a model, Mimir indexes the repository, selects the
-highest-signal evidence, fits it inside an explicit token budget, and writes a
-hashable context packet before any provider call.
-
-The result is a more accurate coding loop: inspectable context, bounded edit
-targets, replayable prompts, redacted artifacts, source-controlled checks, and a
-fail-closed patch flow that makes AI edits easier to trust.
+Mimir is a coding CLI built around a Context Governor that produces hashable, replayable context packets capped at ~64k tokens by default. Every prompt is an inspectable, shareable, replayable manifest.
 
 ## Install
 
@@ -70,6 +63,10 @@ mimir memory import-sessions --from codex --discover --dry-run
 # Inspect a saved packet in the TUI
 mimir tui --packet .mimir/runs/<run-id>/context_packet.json
 mimir tui --server 127.0.0.1:7788 --task "Refresh context for this repo"
+
+# Open the local Studio UI
+mimir ui
+mimir serve --ui --port 7788
 
 # Run the local context recall eval dataset
 mimir eval context --dataset fixtures/context-recall-v1.yaml
@@ -133,7 +130,4 @@ cargo build --release
 
 ## License
 
-Mimir is source-visible, not open source. You may view, clone, build, and run it
-for evaluation, but copying, redistribution, derivative works, commercial use,
-or integration into another project or service requires prior written permission
-from Living Ethos. See [LICENSE](LICENSE).
+Apache-2.0
