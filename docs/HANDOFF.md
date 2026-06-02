@@ -2,10 +2,10 @@
 
 ## Current Status
 
-**Version:** v1.0.0 production-readiness hardening in progress
-**Branch:** phase6/memory-server-tui
-**Tests:** full `./scripts/validate-production.sh` passing locally after eval and packaging-guard updates
-**Commits:** current branch has Phase 7 cleanup commits plus this uncommitted hardening bucket
+**Version:** v1.0.0 production-readiness hardening
+**Branch:** phase7/v1-exit-gates (off `phase7/override-audit-and-injection`)
+**Tests:** 531 pass / 0 fail (`cargo test --workspace --all-targets`); fmt + workspace clippy `-D warnings` clean; `./scripts/validate-production.sh` green
+**Commits:** all work committed; working tree clean. Every `18-DEFINITION-OF-DONE.md` exit gate is ticked except `v1.0.0` tag on green CI (needs GitHub write access + CI on the release commit).
 
 ## v1.0 Exit-Gate Slices - 2026-06-02
 
@@ -50,6 +50,18 @@ workstreams landed; all changes are test/doc/bench, no runtime behavior change.
   and grounded in current code (exit codes 0/1/2 only, with the 3–16/64/70/…
   scheme marked reserved/planned). The `V1.0-ROADMAP.md` exit gate "5 ADRs,
   CHANGELOG, docs complete" is now ticked.
+- **Two more gates locked + perf/eval ticks.** `crates/mimir-schemas/tests/p0_schemas.rs`
+  compiles every schema as JSON Schema 2020-12 (cross-`$ref` via an in-memory,
+  network-free registry) and validates all 25 examples 1:1 ("All P0 schemas
+  validate"). `crates/mimir-cli/tests/prompt_replay.rs` asserts `packet replay
+  <run-id> --request-json` is byte-identical to the persisted
+  `provider_request.redacted.json` for ask/plan/code/context-call ("All prompts
+  replayable from local artifacts"). "Performance targets met" and "Eval: 15+
+  fixtures, modes 0,2,3,4,5" are also ticked (the latter locked by
+  `cap_compliance.rs`). **Net result: every exit gate is ticked except `v1.0.0`
+  tag on green CI**, which needs GitHub write access + CI on the release commit.
+  Final: 531 tests pass, fmt + workspace clippy clean, `validate-production.sh`
+  green.
 
 ## Override Audit, Prompt-Injection, and Security Slices - 2026-06-01
 
