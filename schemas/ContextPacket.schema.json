@@ -148,7 +148,19 @@
           "tokens": { "type": "integer", "minimum": 0 },
           "source_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
           "trust_level": { "type": "string", "enum": ["trusted", "untrusted"] },
-          "editable": { "type": "boolean" }
+          "editable": { "type": "boolean" },
+          "compression": {
+            "type": ["object", "null"],
+            "required": ["algorithm", "original_tokens", "compressed_tokens", "original_hash", "original_artifact_path"],
+            "properties": {
+              "algorithm": { "type": "string", "enum": ["none", "code_skeleton", "json_crush"] },
+              "original_tokens": { "type": "integer", "minimum": 0 },
+              "compressed_tokens": { "type": "integer", "minimum": 0 },
+              "original_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "original_artifact_path": { "type": "string", "description": "Path under .mimir/runs/<run_id>/artifacts/ holding the verbatim original body." }
+            },
+            "additionalProperties": false
+          }
         }
       }
     },

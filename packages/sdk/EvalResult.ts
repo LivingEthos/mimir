@@ -27,6 +27,7 @@ export interface EvalResult {
     retrieval_latency_ms?: number;
     repo_map_refresh_latency_ms?: number;
     e2e_latency_ms: number;
+    tokens_in?: number;
     tokens_in_total: number;
     tokens_out_total: number;
     cost_usd_total: number;
@@ -40,4 +41,9 @@ export interface EvalResult {
   packet_id?: string;
   run_id?: string;
   ran_at: string;
+  answer_correct?: boolean | null;
+  /**
+   * Eval arm label, e.g. 'verbatim' or 'compressed'.
+   */
+  arm?: string | null;
 }

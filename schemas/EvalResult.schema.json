@@ -37,6 +37,7 @@
         "retrieval_latency_ms": { "type": "integer", "minimum": 0 },
         "repo_map_refresh_latency_ms": { "type": "integer", "minimum": 0 },
         "e2e_latency_ms": { "type": "integer", "minimum": 0 },
+        "tokens_in": { "type": "integer", "minimum": 0 },
         "tokens_in_total": { "type": "integer", "minimum": 0 },
         "tokens_out_total": { "type": "integer", "minimum": 0 },
         "cost_usd_total": { "type": "number", "minimum": 0 },
@@ -51,7 +52,9 @@
     },
     "packet_id": { "type": "string" },
     "run_id": { "type": "string" },
-    "ran_at": { "type": "string", "format": "date-time" }
+    "ran_at": { "type": "string", "format": "date-time" },
+    "answer_correct": { "type": ["boolean", "null"] },
+    "arm": { "type": ["string", "null"], "description": "Eval arm label, e.g. 'verbatim' or 'compressed'." }
   },
   "additionalProperties": false
 }

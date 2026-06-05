@@ -120,6 +120,16 @@ export interface ContextPacket {
     source_hash: string;
     trust_level: "trusted" | "untrusted";
     editable: boolean;
+    compression?: {
+      algorithm: "none" | "code_skeleton" | "json_crush";
+      original_tokens: number;
+      compressed_tokens: number;
+      original_hash: string;
+      /**
+       * Path under .mimir/runs/<run_id>/artifacts/ holding the verbatim original body.
+       */
+      original_artifact_path: string;
+    } | null;
   }[];
   /**
    * Top-N omitted candidates, per OmittedCandidate.schema.json.
