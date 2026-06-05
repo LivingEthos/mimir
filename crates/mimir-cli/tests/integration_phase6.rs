@@ -93,6 +93,7 @@ fn rewrite_packet_included_file(packet_path: &std::path::Path, path: &str, sourc
         source_hash: source_hash.to_string(),
         trust_level: "trusted".to_string(),
         editable: false,
+        compression: None,
     }];
     packet.packet_hash = mimir_context::hash_packet(&packet);
     std::fs::write(packet_path, serde_json::to_vec_pretty(&packet).unwrap()).unwrap();

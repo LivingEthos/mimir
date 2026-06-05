@@ -1,0 +1,70 @@
+schema_version: 1
+id: answer-quality-v1
+description: |
+  Seed fixture for provider-backed answer-quality eval.
+  Each case asks a simple coding question; the gold answer is exact-match.
+cases:
+  - id: aq-001-rust-sum
+    repo_path: .
+    base_commit: HEAD
+    task: "Write a Rust function named `sum_two` that takes two i32 arguments and returns their sum."
+    gold:
+      files: []
+      ranges: []
+    expected_tests: []
+    allowed_mode: ask
+    allowed_caps_to_test: [64000]
+    gold_answer: "fn sum_two(a: i32, b: i32) -> i32 { a + b }"
+    grading: exact_match
+
+  - id: aq-002-py-hello
+    repo_path: .
+    base_commit: HEAD
+    task: "Write a Python function named `hello` that returns the string 'hello world'."
+    gold:
+      files: []
+      ranges: []
+    expected_tests: []
+    allowed_mode: ask
+    allowed_caps_to_test: [64000]
+    gold_answer: "def hello():\n    return 'hello world'"
+    grading: contains
+
+  - id: aq-003-ts-type
+    repo_path: .
+    base_commit: HEAD
+    task: "Write a TypeScript type alias named `UserID` that is a string."
+    gold:
+      files: []
+      ranges: []
+    expected_tests: []
+    allowed_mode: ask
+    allowed_caps_to_test: [64000]
+    gold_answer: "type UserID = string;"
+    grading: exact_match
+
+  - id: aq-004-json-key
+    repo_path: .
+    base_commit: HEAD
+    task: "In JSON, what key holds the schema version in EvalResult? Answer with just the key name."
+    gold:
+      files: []
+      ranges: []
+    expected_tests: []
+    allowed_mode: ask
+    allowed_caps_to_test: [64000]
+    gold_answer: "schema_version"
+    grading: exact_match
+
+  - id: aq-005-go-slice-len
+    repo_path: .
+    base_commit: HEAD
+    task: "In Go, what built-in function returns the length of a slice? Answer with just the function name."
+    gold:
+      files: []
+      ranges: []
+    expected_tests: []
+    allowed_mode: ask
+    allowed_caps_to_test: [64000]
+    gold_answer: "len"
+    grading: exact_match

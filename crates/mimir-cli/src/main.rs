@@ -27,6 +27,7 @@ use mimir_schemas::{
     PatchStep,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tracing::info;
 
 const MAX_PROVIDER_RESPONSE_ARTIFACT_BYTES: usize = 256 * 1024;
@@ -380,6 +381,16 @@ enum ContextCmd {
         /// Run ID.
         run_id: String,
     },
+    /// Expand the verbatim original of a compressed or omitted candidate.
+    Expand {
+        /// Run ID.
+        run_id: String,
+        /// File path or source hash to look up.
+        target: String,
+        /// Output JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Suggest starting context for a task without calling a provider.
     Suggest {
         /// Task or question to map.
@@ -485,6 +496,21 @@ enum EvalCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Run provider-backed answer-quality eval (requires API key).
+    Answer {
+        /// Provider to call.
+        #[arg(long, default_value = "glm")]
+        provider: String,
+        /// Model to call.
+        #[arg(long)]
+        model: Option<String>,
+        /// Dataset YAML path.
+        #[arg(long)]
+        dataset: String,
+        /// Arms to compare (comma-separated).
+        #[arg(long, default_value = "verbatim,compressed")]
+        compare: String,
+    },
 }
 
 fn default_model(provider: &str) -> &'static str {
@@ -501,6 +527,21 @@ fn normalized_provider(provider: &str) -> String {
         "zai" => "glm".to_string(),
         other => other.to_string(),
     }
+}
+
+/// Whether an API key for the given provider is present in the environment.
+///
+/// Mirrors the env vars read by the provider adapters; used to report whether
+/// live answer grading *could* run, without ever reading the key value.
+fn answer_provider_key_present(provider: &str) -> bool {
+    let vars: &[&str] = match provider {
+        "anthropic" => &["ANTHROPIC_API_KEY"],
+        "glm" | "zai" => &["GLM_API_KEY", "ZAI_API_KEY"],
+        "openai" | "openai-compatible" => &["OPENAI_API_KEY"],
+        _ => &[],
+    };
+    vars.iter()
+        .any(|var| std::env::var_os(var).is_some_and(|value| !value.is_empty()))
 }
 
 fn build_packet(
@@ -857,6 +898,104 @@ fn browser_open_command(url: &str) -> ProcessCommand {
         command.arg(url);
         command
     }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+fn run_context_expand(run_id: &str, target: &str, json: bool) -> Result<()> {
+    let parsed_run_id =
+        RunId::parse(run_id.to_string()).map_err(|_| anyhow!("invalid run id: {}", run_id))?;
+    let mimir_root = camino::Utf8PathBuf::from(".mimir");
+    let run_dir = RunDir::open(&mimir_root, &parsed_run_id)
+        .map_err(|_| anyhow!("run {} not found", run_id))?;
+    let packet_path = run_dir.context_packet_path();
+    let packet: mimir_schemas::ContextPacket = serde_json::from_str(
+        &fs::read_to_string(packet_path.as_std_path())
+            .map_err(|_| anyhow!("packet not found for run {}", run_id))?,
+    )
+    .map_err(|_| anyhow!("invalid packet for run {}", run_id))?;
+
+    // Look in included items first (compression metadata).
+    let found = packet.included.iter().find(|item| {
+        item.path == target
+            || item.source_hash == target
+            || item
+                .compression
+                .as_ref()
+                .map(|c| c.original_hash == target)
+                .unwrap_or(false)
+    });
+
+    let (artifact_path, original_hash) = if let Some(item) = found {
+        if let Some(ref compression) = item.compression {
+            (
+                Some(camino::Utf8PathBuf::from(
+                    &compression.original_artifact_path,
+                )),
+                compression.original_hash.clone(),
+            )
+        } else {
+            // Not compressed — expand from the working tree file directly.
+            let workspace_path = Path::new(".").join(&item.path);
+            (
+                Some(camino::Utf8PathBuf::from_path_buf(workspace_path).unwrap_or_default()),
+                item.source_hash.clone(),
+            )
+        }
+    } else {
+        // Check omitted candidates (may have source_hash).
+        let omitted = packet
+            .omitted_candidates
+            .iter()
+            .find(|item| item.path == target || item.source_hash.as_deref() == Some(target));
+        if let Some(item) = omitted {
+            if let Some(ref hash) = item.source_hash {
+                let artifact_name = format!("{}.orig", hash);
+                (
+                    Some(run_dir.artifacts_path().join(artifact_name)),
+                    hash.clone(),
+                )
+            } else {
+                bail!("No stored original for omitted candidate {}", target);
+            }
+        } else {
+            bail!("{} not found in run {}", target, run_id);
+        }
+    };
+
+    let artifact_path = artifact_path.ok_or_else(|| anyhow!("no artifact path resolved"))?;
+    let bytes = fs::read(artifact_path.as_std_path())
+        .map_err(|e| anyhow!("failed to read artifact: {}", e))?;
+    let actual_hash = sha256_hex(&bytes);
+    if actual_hash != original_hash {
+        bail!(
+            "hash mismatch: expected {} but artifact has {} — possible tampering",
+            original_hash,
+            actual_hash
+        );
+    }
+
+    let content = String::from_utf8_lossy(&bytes);
+    if contains_secret_like_text(&content) {
+        bail!("expand refused: content contains secret-like material");
+    }
+
+    if json {
+        let output = serde_json::json!({
+            "run_id": run_id,
+            "target": target,
+            "content": content,
+            "hash_verified": actual_hash == original_hash,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("{}", content);
+    }
+    Ok(())
 }
 
 fn run_context_suggest_command(
@@ -4695,6 +4834,17 @@ fn main() -> Result<()> {
                 Ok(mimir_context::WhyResult::NotFound) => println!("not found"),
                 Err(error) => println!("Error: {}", error),
             },
+            ContextCmd::Expand {
+                run_id,
+                target,
+                json,
+            } => match run_context_expand(&run_id, &target, json) {
+                Ok(()) => {}
+                Err(error) => {
+                    eprintln!("Error: {}", error);
+                    std::process::exit(1);
+                }
+            },
             ContextCmd::Suggest {
                 task,
                 provider,
@@ -5491,6 +5641,32 @@ fn main() -> Result<()> {
                 output,
                 json,
             } => run_eval_context_command(dataset, cap_tokens, output, json)?,
+            EvalCmd::Answer {
+                provider,
+                model,
+                dataset,
+                compare,
+            } => {
+                let model = model.unwrap_or_else(|| default_model(&provider).to_string());
+                eprintln!(
+                    "answer-quality eval: provider={provider} model={model} dataset={dataset} arms={compare}"
+                );
+                let ds = mimir_eval::answer_eval::load_answer_dataset(&dataset)?;
+                // Offline, CI-safe core: build both arms and report token savings.
+                let report = mimir_eval::answer_eval::token_savings_report(&ds, &provider, &model)?;
+                println!("{}", serde_json::to_string_pretty(&report)?);
+                // Live answer grading needs a provider key + network dispatch,
+                // which is not wired in v1.1. Be explicit about what ran.
+                if answer_provider_key_present(&provider) {
+                    eprintln!(
+                        "note: '{provider}' key detected, but live answer grading is not wired in v1.1; reported offline token savings only."
+                    );
+                } else {
+                    eprintln!(
+                        "note: no API key for '{provider}'; reported offline token savings only (answer grading skipped)."
+                    );
+                }
+            }
         },
     }
 
