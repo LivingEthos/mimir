@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/mimir-cli",
+    "crates/mimir-compress",
     "crates/mimir-core",
     "crates/mimir-context",
     "crates/mimir-edit",
