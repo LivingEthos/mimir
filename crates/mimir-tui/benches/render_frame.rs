@@ -42,6 +42,7 @@ fn representative_packet() -> ContextPacket {
             source_hash: "a".repeat(64),
             trust_level: "trusted".to_string(),
             editable: true,
+            compression: None,
         })
         .collect();
 

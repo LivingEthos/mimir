@@ -1,4 +1,4 @@
-//! Token policy: cap, reserve, drift.
+//! Token policy: cap, reserve, drift, compression.
 
 /// Token policy configuration.
 #[derive(Debug, Clone)]
@@ -9,6 +9,10 @@ pub struct TokenPolicy {
     pub output_reserve_tokens: u32,
     /// Reserved for count drift.
     pub count_drift_reserve_tokens: u32,
+    /// Whether reversible context compression is enabled.
+    pub compression_enabled: bool,
+    /// Minimum token count before a candidate is considered for compression.
+    pub compress_threshold_tokens: u32,
 }
 
 impl Default for TokenPolicy {
@@ -17,6 +21,8 @@ impl Default for TokenPolicy {
             cap_tokens: 64000,
             output_reserve_tokens: 4096,
             count_drift_reserve_tokens: 512,
+            compression_enabled: true,
+            compress_threshold_tokens: 2048,
         }
     }
 }
@@ -59,8 +65,17 @@ mod tests {
             cap_tokens: 1000,
             output_reserve_tokens: 500,
             count_drift_reserve_tokens: 500,
+            compression_enabled: false,
+            compress_threshold_tokens: 2048,
         };
         assert_eq!(p.available(), 0);
         assert!(!p.fits(1));
+    }
+
+    #[test]
+    fn default_compression_enabled() {
+        let p = TokenPolicy::default();
+        assert!(p.compression_enabled);
+        assert_eq!(p.compress_threshold_tokens, 2048);
     }
 }

@@ -96,6 +96,7 @@ fn test_packet_only_included_and_omitted_panels_use_packet_data() {
         source_hash: "a".repeat(64),
         trust_level: "trusted".to_string(),
         editable: true,
+        compression: None,
     }];
     packet.omitted_candidates = vec![OmittedCandidate {
         schema_version: 1,

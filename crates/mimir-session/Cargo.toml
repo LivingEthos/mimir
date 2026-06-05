@@ -9,6 +9,8 @@ repository.workspace = true
 
 [dependencies]
 mimir-context = { path = "../mimir-context" }
+mimir-compress = { path = "../mimir-compress" }
+mimir-index = { path = "../mimir-index" }
 mimir-providers = { path = "../mimir-providers" }
 mimir-review = { path = "../mimir-review" }
 mimir-runs = { path = "../mimir-runs" }

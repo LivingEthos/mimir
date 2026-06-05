@@ -658,6 +658,31 @@ fn included_item_content(
             item.path
         );
     }
+
+    // If the packet carries compression metadata, deterministically re-compress
+    // the verified original so the provider request matches the token count
+    // recorded in the packet.
+    if let Some(ref compression) = item.compression {
+        let language =
+            mimir_index::detect_language(std::path::Path::new(&item.path), Some(&content));
+        let compressed = mimir_compress::compress_body(
+            &content,
+            &language,
+            0,
+            mimir_providers::count::count_local,
+        );
+        // Verify the deterministic hash matches what the builder recorded.
+        if compressed.original_hash != compression.original_hash {
+            bail!(
+                "included context '{}' compression hash mismatch: declared {}, actual {}",
+                item.path,
+                compression.original_hash,
+                compressed.original_hash
+            );
+        }
+        return Ok(compressed.text);
+    }
+
     Ok(content)
 }
 

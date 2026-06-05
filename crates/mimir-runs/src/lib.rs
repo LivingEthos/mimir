@@ -134,6 +134,20 @@ impl RunDir {
         self.root.join(TRACE_SPANS_FILE)
     }
 
+    /// Path to the artifacts directory.
+    pub fn artifacts_path(&self) -> Utf8PathBuf {
+        self.root.join("artifacts")
+    }
+
+    /// Path to a named artifact under the artifacts directory.
+    ///
+    /// Creates the artifacts directory if it does not exist.
+    pub fn artifact_path(&self, name: &str) -> std::io::Result<Utf8PathBuf> {
+        let dir = self.artifacts_path();
+        fs::create_dir_all(&dir)?;
+        Ok(dir.join(name))
+    }
+
     /// Write an event line to `events.jsonl`.
     pub fn append_event(&self, event: &impl Serialize) -> std::io::Result<()> {
         let path = self.events_path();
