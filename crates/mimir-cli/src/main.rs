@@ -19,7 +19,8 @@ use mimir_edit::{
 use mimir_providers::adapters::anthropic::AnthropicAdapter;
 use mimir_providers::{
     OpenAiCompatibleAdapter, ProviderDispatchAdapter, ProviderGateway, ProviderRequest,
-    ProviderResponse, ResponseBlock, TokenUsage, ValidatedPacket, ValidatedProviderRequest,
+    ProviderResponse, ResponseBlock, TokenUsage, ToolSchema, ValidatedPacket,
+    ValidatedProviderRequest,
 };
 use mimir_runs::{atomic_write, RunDir, RunId};
 use mimir_schemas::{
@@ -56,6 +57,7 @@ const KNOWN_COMMAND_RECIPE_TOOLS: &[&str] = &[
     "run_tests",
     "search_code",
 ];
+const RETRIEVE_TOOL_NAME: &str = "retrieve";
 
 #[derive(Parser)]
 #[command(name = "mimir")]
@@ -104,6 +106,9 @@ enum Commands {
         /// Override provider API base URL.
         #[arg(long)]
         base_url: Option<String>,
+        /// Advertise the bounded retrieve tool schema to the model.
+        #[arg(long)]
+        enable_retrieve: bool,
         /// Output JSON instead of human-readable text.
         #[arg(long)]
         json: bool,
@@ -139,6 +144,9 @@ enum Commands {
         /// Override provider API base URL.
         #[arg(long)]
         base_url: Option<String>,
+        /// Advertise the bounded retrieve tool schema to the model.
+        #[arg(long)]
+        enable_retrieve: bool,
         /// Validate and persist the patch without changing the working tree.
         #[arg(long)]
         dry_run: bool,
@@ -931,20 +939,23 @@ fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn run_context_expand(run_id: &str, target: &str, json: bool) -> Result<()> {
-    let parsed_run_id =
-        RunId::parse(run_id.to_string()).map_err(|_| anyhow!("invalid run id: {}", run_id))?;
-    let mimir_root = camino::Utf8PathBuf::from(".mimir");
-    let run_dir = RunDir::open(&mimir_root, &parsed_run_id)
-        .map_err(|_| anyhow!("run {} not found", run_id))?;
-    let packet_path = run_dir.context_packet_path();
-    let packet: mimir_schemas::ContextPacket = serde_json::from_str(
-        &fs::read_to_string(packet_path.as_std_path())
-            .map_err(|_| anyhow!("packet not found for run {}", run_id))?,
-    )
-    .map_err(|_| anyhow!("invalid packet for run {}", run_id))?;
+#[derive(Debug, Clone, Copy)]
+enum OriginalResolutionMode {
+    /// Preserve `mimir context expand` behavior: compressed items, omitted
+    /// originals, and already-included worktree files are all expandable.
+    CliExpand,
+    /// Model-callable retrieval must only return stored originals from this
+    /// run, never arbitrary worktree reads.
+    #[allow(dead_code)]
+    StoredOriginalOnly,
+}
 
-    // Look in included items first (compression metadata).
+fn resolve_run_original(
+    run_dir: &RunDir,
+    packet: &mimir_schemas::ContextPacket,
+    target: &str,
+    mode: OriginalResolutionMode,
+) -> Result<String> {
     let found = packet.included.iter().find(|item| {
         item.path == target
             || item.source_hash == target
@@ -963,16 +974,19 @@ fn run_context_expand(run_id: &str, target: &str, json: bool) -> Result<()> {
                 )),
                 compression.original_hash.clone(),
             )
-        } else {
-            // Not compressed — expand from the working tree file directly.
+        } else if matches!(mode, OriginalResolutionMode::CliExpand) {
             let workspace_path = Path::new(".").join(&item.path);
             (
                 Some(camino::Utf8PathBuf::from_path_buf(workspace_path).unwrap_or_default()),
                 item.source_hash.clone(),
             )
+        } else {
+            bail!(
+                "{} is already present in the packet; retrieve only serves stored originals",
+                target
+            );
         }
     } else {
-        // Check omitted candidates (may have source_hash).
         let omitted = packet
             .omitted_candidates
             .iter()
@@ -988,7 +1002,7 @@ fn run_context_expand(run_id: &str, target: &str, json: bool) -> Result<()> {
                 bail!("No stored original for omitted candidate {}", target);
             }
         } else {
-            bail!("{} not found in run {}", target, run_id);
+            bail!("{} not found in run {}", target, packet.run_id);
         }
     };
 
@@ -1004,17 +1018,36 @@ fn run_context_expand(run_id: &str, target: &str, json: bool) -> Result<()> {
         );
     }
 
-    let content = String::from_utf8_lossy(&bytes);
+    let content = String::from_utf8_lossy(&bytes).to_string();
     if contains_secret_like_text(&content) {
         bail!("expand refused: content contains secret-like material");
     }
+
+    Ok(content)
+}
+
+fn run_context_expand(run_id: &str, target: &str, json: bool) -> Result<()> {
+    let parsed_run_id =
+        RunId::parse(run_id.to_string()).map_err(|_| anyhow!("invalid run id: {}", run_id))?;
+    let mimir_root = camino::Utf8PathBuf::from(".mimir");
+    let run_dir = RunDir::open(&mimir_root, &parsed_run_id)
+        .map_err(|_| anyhow!("run {} not found", run_id))?;
+    let packet_path = run_dir.context_packet_path();
+    let packet: mimir_schemas::ContextPacket = serde_json::from_str(
+        &fs::read_to_string(packet_path.as_std_path())
+            .map_err(|_| anyhow!("packet not found for run {}", run_id))?,
+    )
+    .map_err(|_| anyhow!("invalid packet for run {}", run_id))?;
+
+    let content =
+        resolve_run_original(&run_dir, &packet, target, OriginalResolutionMode::CliExpand)?;
 
     if json {
         let output = serde_json::json!({
             "run_id": run_id,
             "target": target,
             "content": content,
-            "hash_verified": actual_hash == original_hash,
+            "hash_verified": true,
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
@@ -1557,6 +1590,45 @@ fn request_from_packet(
     stream: bool,
 ) -> Result<ProviderRequest> {
     mimir_session::packet::provider_request_from_packet(camino::Utf8Path::new("."), packet, stream)
+}
+
+fn retrieve_tool_schema() -> ToolSchema {
+    ToolSchema {
+        name: RETRIEVE_TOOL_NAME.to_string(),
+        description: Some(
+            "Retrieve the hash-verified original text for a compressed or omitted item already recorded in this run's context packet.".to_string(),
+        ),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "Workspace-relative path or source hash from this run's context packet."
+                }
+            },
+            "required": ["target"],
+            "additionalProperties": false
+        }),
+    }
+}
+
+fn attach_retrieve_tool_schema(request: &mut ProviderRequest) {
+    let tools = request.tools.get_or_insert_with(Vec::new);
+    if !tools.iter().any(|tool| tool.name == RETRIEVE_TOOL_NAME) {
+        tools.push(retrieve_tool_schema());
+    }
+}
+
+fn fail_closed_on_tool_use(response: &ProviderResponse) -> Result<()> {
+    if let Some((name, _id)) = response.content.iter().find_map(|block| match block {
+        ResponseBlock::ToolUse { name, id, .. } => Some((name, id)),
+        ResponseBlock::Text { .. } => None,
+    }) {
+        bail!(
+            "provider requested tool '{name}', but the retrieve tool loop is not yet wired; failing closed"
+        );
+    }
+    Ok(())
 }
 
 fn validate_packet_for_dispatch(
@@ -2178,6 +2250,7 @@ struct CodeCommandOptions {
     provider: String,
     model: Option<String>,
     base_url: Option<String>,
+    enable_retrieve: bool,
     dry_run: bool,
     json: bool,
 }
@@ -2243,17 +2316,24 @@ struct CommandRecipeExecution {
     expanded_task: String,
 }
 
-fn plan_request_from_packet(packet: &mimir_schemas::ContextPacket) -> Result<ProviderRequest> {
+fn plan_request_from_packet(
+    packet: &mimir_schemas::ContextPacket,
+    enable_retrieve: bool,
+) -> Result<ProviderRequest> {
     let prompt = format!(
         "Generate a production implementation plan for the task using the replayable context below.\n\nReturn only JSON with this shape:\n{{\"steps\":[\"concise ordered step\"],\"risks\":[\"risk\"],\"files_likely_affected\":[\"relative/path\"],\"tests_to_run\":[\"command\"],\"assumptions\":[\"assumption\"]}}\n\nKeep steps concise and actionable. Do not include markdown.\n\n{}",
         context_prompt(packet)?
     );
-    Ok(request_from_packet_with_prompt(
+    let mut request = request_from_packet_with_prompt(
         packet,
         "You are Mimir Planner. Produce concise, structured, replayable implementation plans and call out uncertainty explicitly.",
         prompt,
         4096,
-    ))
+    );
+    if enable_retrieve {
+        attach_retrieve_tool_schema(&mut request);
+    }
+    Ok(request)
 }
 
 fn code_request_from_packet(
@@ -2262,6 +2342,7 @@ fn code_request_from_packet(
     max_repair_turns: u32,
     cost_cap: f64,
     output_budget_tokens: Option<u32>,
+    enable_retrieve: bool,
 ) -> Result<ProviderRequest> {
     let editable_json = serde_json::to_string(editable).unwrap_or_else(|_| "[]".to_string());
     let prompt = format!(
@@ -2271,12 +2352,16 @@ fn code_request_from_packet(
         packet.packet_id,
         context_prompt(packet)?
     );
-    Ok(request_from_packet_with_prompt(
+    let mut request = request_from_packet_with_prompt(
         packet,
         "You are Mimir Code. Produce only safe, minimal PatchPlan JSON. Never propose edits outside the editable target set.",
         prompt,
         output_budget_tokens.unwrap_or(packet.output_reserve_tokens),
-    ))
+    );
+    if enable_retrieve {
+        attach_retrieve_tool_schema(&mut request);
+    }
+    Ok(request)
 }
 
 fn parse_json_from_response<T>(text: &str) -> Result<T>
@@ -4143,6 +4228,7 @@ fn run_plan_command(
     provider: String,
     model: Option<String>,
     base_url: Option<String>,
+    enable_retrieve: bool,
     json: bool,
 ) -> Result<()> {
     let provider = normalized_provider(&provider);
@@ -4164,7 +4250,7 @@ fn run_plan_command(
     atomic_write(&run_dir.context_packet_path(), &packet_json)?;
     append_context_build_trace_span(&run_dir, &packet, context_start_us)?;
 
-    let request = plan_request_from_packet(&packet)?;
+    let request = plan_request_from_packet(&packet, enable_retrieve)?;
     write_provider_request_artifact(&run_dir, &request)?;
     let response = match call_provider_with_request(
         &packet,
@@ -4181,6 +4267,10 @@ fn run_plan_command(
         }
     };
     write_provider_artifacts(&run_dir, &response)?;
+    if let Err(error) = fail_closed_on_tool_use(&response) {
+        append_command_trace_span(&run_dir, &packet, "mimir.plan", command_start_us, "error")?;
+        return Err(error);
+    }
 
     let text = response_text(&response);
     let mut plan = plan_artifact_from_response(&packet, &editable, &text);
@@ -4285,6 +4375,7 @@ fn run_code_command(options: CodeCommandOptions) -> Result<()> {
         command_recipe
             .as_ref()
             .map(|recipe| recipe.output_budget_tokens),
+        options.enable_retrieve,
     )?;
     let estimated_initial_cost = estimate_repair_request_cost(&provider, &model, &request);
     if let Some(reason) = initial_cost_preflight_rejection(estimated_initial_cost, options.cost_cap)
@@ -4342,6 +4433,10 @@ fn run_code_command(options: CodeCommandOptions) -> Result<()> {
         }
     };
     write_provider_artifacts(&run_dir, &response)?;
+    if let Err(error) = fail_closed_on_tool_use(&response) {
+        append_command_trace_span(&run_dir, &packet, "mimir.code", command_start_us, "error")?;
+        return Err(error);
+    }
     let initial_cost = estimate_provider_cost(&provider, &response.model, &response.usage);
     if let Some(reason) = provider_response_cost_rejection(initial_cost, options.cost_cap) {
         let reason = redacted_message(reason);
@@ -5012,8 +5107,17 @@ fn main() -> Result<()> {
             provider,
             model,
             base_url,
+            enable_retrieve,
             json,
-        } => run_plan_command(task, editable, provider, model, base_url, json)?,
+        } => run_plan_command(
+            task,
+            editable,
+            provider,
+            model,
+            base_url,
+            enable_retrieve,
+            json,
+        )?,
         Commands::Code {
             task,
             editable,
@@ -5025,6 +5129,7 @@ fn main() -> Result<()> {
             provider,
             model,
             base_url,
+            enable_retrieve,
             dry_run,
             json,
         } => run_code_command(CodeCommandOptions {
@@ -5038,6 +5143,7 @@ fn main() -> Result<()> {
             provider,
             model,
             base_url,
+            enable_retrieve,
             dry_run,
             json,
         })?,
@@ -5805,6 +5911,145 @@ mod tests {
             request_from_packet_with_prompt(&packet, "system", "prompt".to_string(), 64_000);
 
         assert_eq!(request.max_tokens, Some(64_000));
+    }
+
+    #[test]
+    fn retrieve_tool_schema_requires_target() {
+        let schema = retrieve_tool_schema();
+
+        assert_eq!(schema.name, "retrieve");
+        assert_eq!(schema.parameters["required"], serde_json::json!(["target"]));
+        assert_eq!(schema.parameters["additionalProperties"], false);
+    }
+
+    #[test]
+    fn plan_request_only_advertises_retrieve_when_enabled() {
+        let packet = ContextBuilder::new()
+            .provider("anthropic")
+            .model("claude-sonnet-4-6")
+            .build()
+            .unwrap();
+
+        let default_request = plan_request_from_packet(&packet, false).unwrap();
+        let retrieve_request = plan_request_from_packet(&packet, true).unwrap();
+
+        assert!(default_request.tools.is_none());
+        let tools = retrieve_request.tools.unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "retrieve");
+    }
+
+    #[test]
+    fn tool_use_response_fails_closed() {
+        let response = ProviderResponse {
+            content: vec![ResponseBlock::ToolUse {
+                id: "toolu_1".to_string(),
+                name: "retrieve".to_string(),
+                input: serde_json::json!({"target": "src/lib.rs"}),
+            }],
+            usage: TokenUsage::default(),
+            model: "test-model".to_string(),
+            stop_reason: Some("tool_use".to_string()),
+            raw: None,
+        };
+
+        let error = fail_closed_on_tool_use(&response).unwrap_err().to_string();
+
+        assert!(error.contains("failing closed"), "{error}");
+    }
+
+    #[test]
+    fn resolve_run_original_stored_mode_serves_only_stored_originals() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mimir_root = camino::Utf8PathBuf::from_path_buf(temp.path().join(".mimir")).unwrap();
+        let run_id = RunId::parse("20260101-120000-abcdef23").unwrap();
+        let run_dir = RunDir::create(&mimir_root, &run_id).unwrap();
+        let content = "pub fn stored_original() {}\n";
+        let hash = sha256_hex(content.as_bytes());
+        let artifact_path = run_dir.artifact_path(&format!("{hash}.orig")).unwrap();
+        fs::write(&artifact_path, content).unwrap();
+
+        let packet: mimir_schemas::ContextPacket = serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "packet_id": "pkt-test",
+            "packet_hash": "0".repeat(64),
+            "run_id": run_id.to_string(),
+            "task_card": {
+                "goal": "test",
+                "acceptance_criteria": [],
+                "likely_files": [],
+                "complexity": "tiny"
+            },
+            "mode": "ask",
+            "cap_tokens": 64000,
+            "target_tokens": 32000,
+            "output_reserve_tokens": 4096,
+            "count_drift_reserve_tokens": 512,
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-20250514",
+            "capability_snapshot_ref": "test",
+            "prompt_contract_version": 1,
+            "included": [
+                {
+                    "path": "src/lib.rs",
+                    "ranges": [{"start": 1, "end": 1}],
+                    "candidate_kind": "full_file",
+                    "reason_code": "symbol_definition",
+                    "tokens": 10,
+                    "source_hash": hash,
+                    "trust_level": "trusted",
+                    "editable": false,
+                    "compression": {
+                        "algorithm": "code_skeleton",
+                        "original_tokens": 50,
+                        "compressed_tokens": 10,
+                        "original_hash": hash,
+                        "original_artifact_path": artifact_path.to_string()
+                    }
+                },
+                {
+                    "path": "src/already_in_prompt.rs",
+                    "ranges": [{"start": 1, "end": 1}],
+                    "candidate_kind": "full_file",
+                    "reason_code": "symbol_definition",
+                    "tokens": 1,
+                    "source_hash": "1".repeat(64),
+                    "trust_level": "trusted",
+                    "editable": false
+                }
+            ],
+            "omitted_candidates": [],
+            "tool_schemas": [],
+            "evidence_cards": [],
+            "memory_entries": [],
+            "budget_ledger_ref": ".mimir/runs/20260101-120000-abcdef23/budget_ledger.json",
+            "estimated_input_tokens": 10,
+            "count_provenance": "local_estimate_only",
+            "created_at": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap();
+
+        let resolved = resolve_run_original(
+            &run_dir,
+            &packet,
+            "src/lib.rs",
+            OriginalResolutionMode::StoredOriginalOnly,
+        )
+        .unwrap();
+        let already_in_prompt_error = resolve_run_original(
+            &run_dir,
+            &packet,
+            "src/already_in_prompt.rs",
+            OriginalResolutionMode::StoredOriginalOnly,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert_eq!(resolved, content);
+        assert!(
+            already_in_prompt_error.contains("already present in the packet"),
+            "{already_in_prompt_error}"
+        );
     }
 
     #[test]

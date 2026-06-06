@@ -106,6 +106,12 @@ mimir context expand <run-id> <source-hash>
 
 `expand` verifies the on-disk bytes against the recorded hash and fails closed on mismatch. It respects `--json` for machine-readable output.
 
+Plan and code requests can advertise an experimental `retrieve` tool schema with
+`--enable-retrieve`. The live model-driven retrieval loop is intentionally still
+deferred until replay supports multi-turn provider request artifacts; if a
+provider returns a tool-use response today, Mimir records the response and fails
+closed instead of silently ignoring it.
+
 Compression can be disabled per-run for a fully-verbatim packet:
 
 ```bash
