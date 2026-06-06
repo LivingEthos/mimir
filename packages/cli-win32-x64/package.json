@@ -1,6 +1,6 @@
 {
   "name": "@mimir/cli-win32-x64",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Windows x64 binary for @mimir/cli",
   "os": ["win32"],
