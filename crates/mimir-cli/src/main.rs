@@ -2939,25 +2939,19 @@ fn validate_unified_diff_headers(path: &str, diff: &str) -> Result<()> {
                 );
             }
             saw_hunk = true;
-            let (expected_old, expected_new) = parse_unified_hunk_counts(lines[index])?;
+            // Validate the hunk header *shape* but do NOT enforce its declared
+            // line counts. LLMs routinely miscount the `@@ -a,b +c,d @@` context
+            // lines, and the applier (mimir_edit apply_unified_diff_text) is
+            // content-based — it positions by the new-file start line and matches
+            // context, ignoring the counts entirely. So we recount from the body
+            // (git apply --recount semantics); a genuinely malformed hunk still
+            // fails closed at apply time on a context mismatch. We still require
+            // every body line to be a valid diff line and the hunk to make at
+            // least one change.
+            let _ = parse_unified_hunk_counts(lines[index])?;
             index += 1;
-            let mut old_count = 0usize;
-            let mut new_count = 0usize;
+            let mut change_lines = 0usize;
             while index < lines.len() {
-                let counts_complete = old_count == expected_old && new_count == expected_new;
-                if counts_complete {
-                    if lines[index].starts_with("\\ ") {
-                        index += 1;
-                        continue;
-                    }
-                    if lines[index].starts_with("@@") || is_diff_file_header_at(&lines, index) {
-                        break;
-                    }
-                    bail!(
-                        "unified diff hunk for {path} has extra line after declared range: {}",
-                        lines[index].trim()
-                    );
-                }
                 if lines[index].starts_with("\\ ") {
                     index += 1;
                     continue;
@@ -2966,12 +2960,8 @@ fn validate_unified_diff_headers(path: &str, diff: &str) -> Result<()> {
                     break;
                 }
                 match lines[index].as_bytes().first() {
-                    Some(b' ') => {
-                        old_count += 1;
-                        new_count += 1;
-                    }
-                    Some(b'-') => old_count += 1,
-                    Some(b'+') => new_count += 1,
+                    Some(b' ') => {}
+                    Some(b'-') | Some(b'+') => change_lines += 1,
                     _ => {
                         bail!(
                             "unified diff hunk line for {path} must start with space, '+', '-', or '\\': {}",
@@ -2979,17 +2969,10 @@ fn validate_unified_diff_headers(path: &str, diff: &str) -> Result<()> {
                         );
                     }
                 }
-                if old_count > expected_old || new_count > expected_new {
-                    bail!(
-                        "unified diff hunk for {path} exceeds declared line counts: expected -{expected_old} +{expected_new}, saw -{old_count} +{new_count}"
-                    );
-                }
                 index += 1;
             }
-            if old_count != expected_old || new_count != expected_new {
-                bail!(
-                    "unified diff hunk for {path} has mismatched line counts: expected -{expected_old} +{expected_new}, saw -{old_count} +{new_count}"
-                );
+            if change_lines == 0 {
+                bail!("unified diff hunk for {path} contains no added or removed lines");
             }
         }
         if !saw_hunk {

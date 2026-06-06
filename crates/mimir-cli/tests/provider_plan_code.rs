@@ -1008,12 +1008,16 @@ fn code_rejects_provider_patch_outside_editable_set() {
 }
 
 #[test]
-fn code_rejects_unified_diff_with_mismatched_hunk_counts() {
+fn code_recounts_unified_diff_with_loose_hunk_counts() {
+    // LLMs routinely emit `@@` headers whose line counts disagree with the hunk
+    // body. The applier is content-based and ignores those counts, so Mimir
+    // recounts (git apply --recount semantics) and applies the patch instead of
+    // rejecting it. Header here claims -1,1 +1,1 but the body adds two lines.
     let dir = TempDir::new().unwrap();
     std::fs::write(dir.path().join("hello.txt"), "old greeting\n").unwrap();
     let provider = start_mock_provider(json!({
         "schema_version": 1,
-        "plan_id": "plan-bad-hunk-count",
+        "plan_id": "plan-loose-hunk-count",
         "steps": [{
             "action": "unified_diff",
             "path": "hello.txt",
@@ -1027,20 +1031,15 @@ fn code_rejects_unified_diff_with_mismatched_hunk_counts() {
             "--editable",
             "hello.txt",
             "--no-test",
-            "Reject bad unified diff counts",
+            "Apply a diff whose hunk counts are loose",
         ])
         .assert()
-        .failure()
-        .stderr(
-            contains("mismatched line counts")
-                .or(contains("exceeds declared line counts"))
-                .or(contains("extra line after declared range")),
-        );
+        .success();
 
-    assert_eq!(
-        std::fs::read_to_string(dir.path().join("hello.txt")).unwrap(),
-        "old greeting\n"
-    );
+    let contents = std::fs::read_to_string(dir.path().join("hello.txt")).unwrap();
+    assert!(contents.contains("new greeting"), "got: {contents}");
+    assert!(contents.contains("extra greeting"), "got: {contents}");
+    assert!(!contents.contains("old greeting"), "got: {contents}");
 }
 
 #[test]
