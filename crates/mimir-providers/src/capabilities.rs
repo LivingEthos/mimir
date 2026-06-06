@@ -372,13 +372,9 @@ pub fn openai_compatible_capabilities(provider: &str, model: &str) -> ProviderCa
         model.to_string(),
         ModelCapabilities {
             max_context_tokens: 131_072,
-            // Reasoning-capable OpenAI-compatible models (e.g. MiniMax-M2.x)
-            // emit long thinking + answer; a 4k output reserve truncated them.
-            // Reserve is raised to 8k; max_input is lowered so the invariant
-            // max_input + output_reserve + drift <= max_context still holds.
-            max_input_tokens: 122_368,
-            max_output_tokens: 16_384,
-            output_reserve_tokens: 8192,
+            max_input_tokens: 126_464,
+            max_output_tokens: 8192,
+            output_reserve_tokens: 4096,
             counts_system_tokens: true,
             counts_tool_schemas: true,
             counts_tool_results: true,
