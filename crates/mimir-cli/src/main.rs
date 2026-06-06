@@ -1822,11 +1822,34 @@ fn run_live_answer_quality_eval(
 ) -> Result<mimir_eval::answer_eval::AnswerQualitySummary> {
     let mut arm_results: BTreeMap<String, Vec<mimir_eval::answer_eval::AnswerQualityRun>> =
         arms.iter().map(|arm| (arm.clone(), Vec::new())).collect();
+    // A live run is dozens-to-hundreds of provider calls; a single transient
+    // failure must not discard every result collected so far. Record and skip.
+    let mut failures = 0usize;
 
     for case in &dataset.cases {
-        let workspace_root = answer_case_workspace_root(case)?;
+        let workspace_root = match answer_case_workspace_root(case) {
+            Ok(root) => root,
+            Err(error) => {
+                eprintln!(
+                    "answer eval: skipping case '{}' (workspace error): {error}",
+                    case.id
+                );
+                failures += 1;
+                continue;
+            }
+        };
         let (verbatim, compressed) =
-            mimir_eval::answer_eval::build_answer_packets(case, provider, model)?;
+            match mimir_eval::answer_eval::build_answer_packets(case, provider, model) {
+                Ok(packets) => packets,
+                Err(error) => {
+                    eprintln!(
+                        "answer eval: skipping case '{}' (packet build error): {error}",
+                        case.id
+                    );
+                    failures += 1;
+                    continue;
+                }
+            };
 
         for arm in arms {
             let packet = match arm.as_str() {
@@ -1834,23 +1857,33 @@ fn run_live_answer_quality_eval(
                 "compressed" => &compressed,
                 _ => unreachable!("answer eval arm validated by parse_answer_compare"),
             };
-            let request_result =
-                mimir_session::packet::provider_request_from_packet(&workspace_root, packet, false);
-            let request = request_result.map_err(|error| {
-                anyhow!(
-                    "failed to build provider request for answer eval case '{}' arm '{}': {error}",
-                    case.id,
-                    arm
-                )
-            })?;
-            let response = call_provider_with_request(packet, request, false, false, None, None)
-                .map_err(|error| {
-                    anyhow!(
-                        "provider dispatch failed for answer eval case '{}' arm '{}': {error}",
-                        case.id,
-                        arm
-                    )
-                })?;
+            let request = match mimir_session::packet::provider_request_from_packet(
+                &workspace_root,
+                packet,
+                false,
+            ) {
+                Ok(request) => request,
+                Err(error) => {
+                    eprintln!(
+                        "answer eval: skipping case '{}' arm '{}' (request build error): {error}",
+                        case.id, arm
+                    );
+                    failures += 1;
+                    continue;
+                }
+            };
+            let response =
+                match call_provider_with_request(packet, request, false, false, None, None) {
+                    Ok(response) => response,
+                    Err(error) => {
+                        eprintln!(
+                            "answer eval: skipping case '{}' arm '{}' (dispatch error): {error}",
+                            case.id, arm
+                        );
+                        failures += 1;
+                        continue;
+                    }
+                };
             let answer = response_text(&response);
             let correct =
                 mimir_eval::answer_eval::grade_answer(&answer, &case.gold_answer, &case.grading);
@@ -1867,6 +1900,12 @@ fn run_live_answer_quality_eval(
                     model: model.to_string(),
                 });
         }
+    }
+
+    if failures > 0 {
+        eprintln!(
+            "answer eval: {failures} case/arm dispatch(es) failed and were excluded from the summary"
+        );
     }
 
     Ok(mimir_eval::answer_eval::AnswerQualitySummary {
