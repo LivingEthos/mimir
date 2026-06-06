@@ -544,6 +544,31 @@ fn answer_provider_key_present(provider: &str) -> bool {
         .any(|var| std::env::var_os(var).is_some_and(|value| !value.is_empty()))
 }
 
+fn parse_answer_compare(compare: &str) -> Result<Vec<String>> {
+    let mut arms = Vec::new();
+    let mut seen = BTreeSet::new();
+    for arm in compare
+        .split(',')
+        .map(str::trim)
+        .filter(|arm| !arm.is_empty())
+    {
+        match arm {
+            "verbatim" | "compressed" => {
+                if seen.insert(arm.to_string()) {
+                    arms.push(arm.to_string());
+                }
+            }
+            other => bail!(
+                "unsupported answer eval arm '{other}'; expected 'verbatim' and/or 'compressed'"
+            ),
+        }
+    }
+    if arms.is_empty() {
+        bail!("answer eval compare list is empty; expected 'verbatim' and/or 'compressed'");
+    }
+    Ok(arms)
+}
+
 fn build_packet(
     task: &str,
     mode: &str,
@@ -1695,6 +1720,87 @@ fn response_text(response: &ProviderResponse) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn answer_case_workspace_root(
+    case: &mimir_eval::answer_eval::AnswerQualityCase,
+) -> Result<camino::Utf8PathBuf> {
+    let path = fs::canonicalize(&case.repo_path).map_err(|error| {
+        anyhow!(
+            "failed to resolve repo_path '{}' for answer eval case '{}': {error}",
+            case.repo_path,
+            case.id
+        )
+    })?;
+    camino::Utf8PathBuf::from_path_buf(path).map_err(|path| {
+        anyhow!(
+            "repo_path '{}' for answer eval case '{}' is not UTF-8: {}",
+            case.repo_path,
+            case.id,
+            path.display()
+        )
+    })
+}
+
+fn run_live_answer_quality_eval(
+    dataset: &mimir_eval::answer_eval::AnswerQualityDataset,
+    provider: &str,
+    model: &str,
+    arms: &[String],
+) -> Result<mimir_eval::answer_eval::AnswerQualitySummary> {
+    let mut arm_results: BTreeMap<String, Vec<mimir_eval::answer_eval::AnswerQualityRun>> =
+        arms.iter().map(|arm| (arm.clone(), Vec::new())).collect();
+
+    for case in &dataset.cases {
+        let workspace_root = answer_case_workspace_root(case)?;
+        let (verbatim, compressed) =
+            mimir_eval::answer_eval::build_answer_packets(case, provider, model)?;
+
+        for arm in arms {
+            let packet = match arm.as_str() {
+                "verbatim" => &verbatim,
+                "compressed" => &compressed,
+                _ => unreachable!("answer eval arm validated by parse_answer_compare"),
+            };
+            let request_result =
+                mimir_session::packet::provider_request_from_packet(&workspace_root, packet, false);
+            let request = request_result.map_err(|error| {
+                anyhow!(
+                    "failed to build provider request for answer eval case '{}' arm '{}': {error}",
+                    case.id,
+                    arm
+                )
+            })?;
+            let response = call_provider_with_request(packet, request, false, false, None, None)
+                .map_err(|error| {
+                    anyhow!(
+                        "provider dispatch failed for answer eval case '{}' arm '{}': {error}",
+                        case.id,
+                        arm
+                    )
+                })?;
+            let answer = response_text(&response);
+            let correct =
+                mimir_eval::answer_eval::grade_answer(&answer, &case.gold_answer, &case.grading);
+            arm_results
+                .get_mut(arm)
+                .expect("answer eval arm result bucket exists")
+                .push(mimir_eval::answer_eval::AnswerQualityRun {
+                    case_id: case.id.clone(),
+                    arm: arm.clone(),
+                    answer,
+                    correct,
+                    tokens_in: response.usage.input_tokens,
+                    provider: provider.to_string(),
+                    model: model.to_string(),
+                });
+        }
+    }
+
+    Ok(mimir_eval::answer_eval::AnswerQualitySummary {
+        dataset_id: dataset.id.clone(),
+        arm_results,
+    })
 }
 
 fn write_provider_artifacts(run_dir: &RunDir, response: &ProviderResponse) -> Result<()> {
@@ -5648,24 +5754,34 @@ fn main() -> Result<()> {
                 compare,
             } => {
                 let model = model.unwrap_or_else(|| default_model(&provider).to_string());
+                let arms = parse_answer_compare(&compare)?;
                 eprintln!(
                     "answer-quality eval: provider={provider} model={model} dataset={dataset} arms={compare}"
                 );
                 let ds = mimir_eval::answer_eval::load_answer_dataset(&dataset)?;
                 // Offline, CI-safe core: build both arms and report token savings.
-                let report = mimir_eval::answer_eval::token_savings_report(&ds, &provider, &model)?;
-                println!("{}", serde_json::to_string_pretty(&report)?);
-                // Live answer grading needs a provider key + network dispatch,
-                // which is not wired in v1.1. Be explicit about what ran.
+                let mut report =
+                    mimir_eval::answer_eval::token_savings_report(&ds, &provider, &model)?;
                 if answer_provider_key_present(&provider) {
+                    let summary = run_live_answer_quality_eval(&ds, &provider, &model, &arms)?;
+                    let grading = mimir_eval::answer_eval::summarize(&summary);
+                    let tokens_saved = report["totals"]["tokens_saved"].as_u64().unwrap_or(0);
+                    let accuracy_delta = grading["deltas"]["accuracy_delta"].as_f64();
+                    let accuracy_delta_display = accuracy_delta
+                        .map(|delta| format!("{delta:.4}"))
+                        .unwrap_or_else(|| "n/a".to_string());
+                    if let Some(obj) = report.as_object_mut() {
+                        obj.insert("answer_grading".to_string(), grading);
+                    }
                     eprintln!(
-                        "note: '{provider}' key detected, but live answer grading is not wired in v1.1; reported offline token savings only."
+                        "answer-quality live summary: tokens_saved={tokens_saved} accuracy_delta={accuracy_delta_display}"
                     );
                 } else {
                     eprintln!(
                         "note: no API key for '{provider}'; reported offline token savings only (answer grading skipped)."
                     );
                 }
+                println!("{}", serde_json::to_string_pretty(&report)?);
             }
         },
     }

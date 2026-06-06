@@ -39,6 +39,10 @@ fn default_grading() -> String {
     "exact_match".to_string()
 }
 
+fn answer_eval_mimir_root() -> PathBuf {
+    std::env::temp_dir().join("mimir-answer-eval")
+}
+
 /// Result of running one case in one arm.
 #[derive(Debug, Clone)]
 pub struct AnswerQualityRun {
@@ -81,6 +85,7 @@ pub fn build_answer_packets(
     model: &str,
 ) -> Result<(mimir_schemas::ContextPacket, mimir_schemas::ContextPacket)> {
     let repo_root = PathBuf::from(&case.repo_path);
+    let mimir_root = answer_eval_mimir_root();
     let repo_index = Arc::new(
         mimir_index::build_index(&repo_root)
             .with_context(|| format!("failed to build index for case {}", case.id))?,
@@ -94,6 +99,7 @@ pub fn build_answer_packets(
         .model(model)
         .repo_root(&repo_root)
         .repo_index(repo_index.clone())
+        .mimir_root(mimir_root.clone())
         .token_policy(TokenPolicy {
             compression_enabled: false,
             ..TokenPolicy::default()
@@ -109,6 +115,7 @@ pub fn build_answer_packets(
         .model(model)
         .repo_root(&repo_root)
         .repo_index(repo_index)
+        .mimir_root(mimir_root)
         .token_policy(TokenPolicy {
             compression_enabled: true,
             ..TokenPolicy::default()
@@ -192,6 +199,7 @@ pub fn grade_answer(answer: &str, gold: &str, grading: &str) -> bool {
 /// Summarize per-arm statistics.
 pub fn summarize(summary: &AnswerQualitySummary) -> serde_json::Value {
     let mut arms = serde_json::Map::new();
+    let mut arm_stats = BTreeMap::new();
     for (arm, runs) in &summary.arm_results {
         let total = runs.len();
         let correct = runs.iter().filter(|r| r.correct).count();
@@ -200,19 +208,41 @@ pub fn summarize(summary: &AnswerQualitySummary) -> serde_json::Value {
         } else {
             0.0
         };
+        let accuracy = if total > 0 {
+            correct as f64 / total as f64
+        } else {
+            0.0
+        };
+        arm_stats.insert(arm.clone(), (accuracy, mean_tokens));
         arms.insert(
             arm.clone(),
             serde_json::json!({
                 "cases": total,
                 "correct": correct,
-                "accuracy": if total > 0 { correct as f64 / total as f64 } else { 0.0 },
+                "accuracy": accuracy,
                 "mean_tokens_in": mean_tokens,
             }),
         );
     }
+    let accuracy_delta = match (arm_stats.get("verbatim"), arm_stats.get("compressed")) {
+        (Some((verbatim_accuracy, _)), Some((compressed_accuracy, _))) => {
+            Some(compressed_accuracy - verbatim_accuracy)
+        }
+        _ => None,
+    };
+    let mean_tokens_saved = match (arm_stats.get("verbatim"), arm_stats.get("compressed")) {
+        (Some((_, verbatim_tokens)), Some((_, compressed_tokens))) => {
+            Some(verbatim_tokens - compressed_tokens)
+        }
+        _ => None,
+    };
     serde_json::json!({
         "dataset_id": summary.dataset_id,
         "arms": arms,
+        "deltas": {
+            "accuracy_delta": accuracy_delta,
+            "mean_tokens_in_saved": mean_tokens_saved,
+        },
     })
 }
 
@@ -266,5 +296,158 @@ mod tests {
         );
         assert_eq!(report["answer_grading"], "not_run");
         assert_eq!(report["cases"].as_array().unwrap().len(), 1);
+    }
+
+    fn workspace_path(path: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(path)
+    }
+
+    fn fixture_path(path: &str) -> std::path::PathBuf {
+        workspace_path(path).canonicalize().unwrap()
+    }
+
+    fn absolutize_case_repo_paths(dataset: &mut AnswerQualityDataset) {
+        let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap();
+        for case in &mut dataset.cases {
+            let repo_path = std::path::PathBuf::from(&case.repo_path);
+            if !repo_path.is_absolute() {
+                case.repo_path = workspace_root.join(repo_path).display().to_string();
+            }
+        }
+    }
+
+    #[test]
+    fn answer_quality_v2_fixture_loads_50_cases() {
+        let dataset = load_answer_dataset(fixture_path("fixtures/answer-quality-v2.yaml")).unwrap();
+
+        assert!(
+            dataset.cases.len() >= 50,
+            "expected at least 50 v2 answer-quality cases, got {}",
+            dataset.cases.len()
+        );
+        for case in &dataset.cases {
+            assert!(!case.id.trim().is_empty(), "case id must be non-empty");
+            assert!(
+                !case.repo_path.trim().is_empty(),
+                "case {} repo_path must be non-empty",
+                case.id
+            );
+            assert_ne!(
+                case.repo_path, ".",
+                "case {} should use a dedicated fixture repo",
+                case.id
+            );
+            assert!(
+                !case.task.trim().is_empty(),
+                "case {} task must be non-empty",
+                case.id
+            );
+            assert!(
+                !case.gold_answer.trim().is_empty(),
+                "case {} gold_answer must be non-empty",
+                case.id
+            );
+        }
+    }
+
+    #[test]
+    fn answer_quality_v2_token_savings_exercises_compression() {
+        let mut dataset =
+            load_answer_dataset(fixture_path("fixtures/answer-quality-v2.yaml")).unwrap();
+        absolutize_case_repo_paths(&mut dataset);
+
+        let report = token_savings_report(&dataset, "glm", "glm-5.1").unwrap();
+        let totals = &report["totals"];
+        let tokens_saved = totals["tokens_saved"].as_u64().unwrap();
+        let compressed_case_count = report["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["compressed_items"].as_u64().unwrap_or(0) > 0)
+            .count();
+
+        assert!(
+            tokens_saved > 0,
+            "v2 fixture should save tokens in aggregate, report={report:#}"
+        );
+        assert!(
+            compressed_case_count >= 10,
+            "expected compression in multiple v2 cases, got {compressed_case_count}"
+        );
+        assert!(
+            !workspace_path("fixtures/repos/answer-quality-v2-rust/.mimir").exists(),
+            "answer eval should not dirty fixture repos with run artifacts"
+        );
+        assert!(
+            !workspace_path("fixtures/repos/answer-quality-v2-typescript/.mimir").exists(),
+            "answer eval should not dirty fixture repos with run artifacts"
+        );
+    }
+
+    #[test]
+    fn summarize_uses_run_correct_flags_for_accuracy() {
+        let mut arm_results = BTreeMap::new();
+        arm_results.insert(
+            "verbatim".to_string(),
+            vec![
+                AnswerQualityRun {
+                    case_id: "c1".to_string(),
+                    arm: "verbatim".to_string(),
+                    answer: "yes".to_string(),
+                    correct: true,
+                    tokens_in: 100,
+                    provider: "glm".to_string(),
+                    model: "glm-5.1".to_string(),
+                },
+                AnswerQualityRun {
+                    case_id: "c2".to_string(),
+                    arm: "verbatim".to_string(),
+                    answer: "no".to_string(),
+                    correct: false,
+                    tokens_in: 80,
+                    provider: "glm".to_string(),
+                    model: "glm-5.1".to_string(),
+                },
+            ],
+        );
+        arm_results.insert(
+            "compressed".to_string(),
+            vec![
+                AnswerQualityRun {
+                    case_id: "c1".to_string(),
+                    arm: "compressed".to_string(),
+                    answer: "yes".to_string(),
+                    correct: true,
+                    tokens_in: 60,
+                    provider: "glm".to_string(),
+                    model: "glm-5.1".to_string(),
+                },
+                AnswerQualityRun {
+                    case_id: "c2".to_string(),
+                    arm: "compressed".to_string(),
+                    answer: "yes".to_string(),
+                    correct: true,
+                    tokens_in: 40,
+                    provider: "glm".to_string(),
+                    model: "glm-5.1".to_string(),
+                },
+            ],
+        );
+        let summary = AnswerQualitySummary {
+            dataset_id: "answers".to_string(),
+            arm_results,
+        };
+
+        let json = summarize(&summary);
+
+        assert_eq!(json["arms"]["verbatim"]["accuracy"], 0.5);
+        assert_eq!(json["arms"]["compressed"]["accuracy"], 1.0);
+        assert_eq!(json["deltas"]["accuracy_delta"], 0.5);
+        assert_eq!(json["deltas"]["mean_tokens_in_saved"], 40.0);
     }
 }
