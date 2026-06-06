@@ -1,51 +1,49 @@
 # Release Readiness — v1.1 (Reversible Context Compression)
 
-Status as of 2026-06-05. **This is an assessment + checklist. The actual
-push/tag/release is intentionally NOT automated** — it is outward-facing and
-hard to reverse, and the git/remote state below needs a human decision first.
+Status as of 2026-06-06. **Topology is now verified for PR prep.** Push, tag,
+release, and Homebrew publication are still outward-facing steps and should stay
+tied to green CI / release assets.
 
 ## Code readiness — GREEN
 
-- Branch `v1.1/reversible-compression` (tip after F/G/H-groundwork/eval work).
-- `./scripts/validate-production.sh` passes end-to-end (fmt, `clippy --workspace
-  -D warnings`, full test suite, doctests, gateway-boundary, `cargo audit`,
-  `cargo deny`, SDK generate/drift/build, validate:examples).
+- Branch `v1.1/reversible-compression` (tip after F/G/H-groundwork/eval work,
+  repair-patch hardening, and `origin/main` reconciliation).
+- `./scripts/validate-production.sh` passed end-to-end on the RCC/eval tip before
+  the final repair-patch hardening commit. Current focused validation after that
+  commit is green: `cargo fmt --all -- --check`, `cargo test -p mimir-edit
+  --all-targets`, `cargo test -p mimir-cli
+  code_fails_closed_when_detected_tests_fail -- --nocapture`, `pnpm --dir
+  apps/studio typecheck`, `pnpm --dir apps/studio lint`, and `cargo clippy -p
+  mimir-edit -p mimir-cli --all-targets -- -D warnings`.
 - v1.0 release machinery untouched by v1.1 (`dist-workspace.toml`,
   `HomebrewFormula/`, `packages/cli/` unchanged).
 - RCC thesis validated on a real provider (MiniMax-M2.7): compression preserves
   answer quality while cutting input tokens ~54% — see
   [`eval-results-rcc-v1.1.md`](eval-results-rcc-v1.1.md).
 
-## Git / remote topology — NEEDS A DECISION
+## Git / remote topology — VERIFIED
 
 | Ref | Commit | Notes |
 |-----|--------|-------|
-| `HEAD` (v1.1) | tip | 50+ commits of v1.1 work |
-| local `main` | `6263004` | **ancestor of HEAD** — v1.1 → local main is a clean fast-forward |
-| `origin/main` | `ab22d48` | **diverged** from the v1.1 line at baseline `6a49148` |
-| tag `v1.0.0` | exists | already present locally (+ "LivingEthos public release" prep commits on local main) |
-| `origin` | `https://github.com/LivingEthos/mimir.git` | but earlier handoff docs call `MisterWonderful/mimir` canonical |
+| `HEAD` (v1.1) | tip | 18 commits ahead / 0 behind `origin/main` after local reconciliation |
+| local `main` | `6263004` | stale local branch, 0 ahead / 40 behind `origin/main`; do not use as release base |
+| `origin/main` | `ab22d48` | public main; merge commit for `phase7/v1-exit-gates`; identical tree to `origin/phase7/v1-exit-gates` |
+| tag `v1.0.0` | exists | published public GitHub release with cargo-dist assets on 2026-05-25 |
+| `origin` | `https://github.com/LivingEthos/mimir.git` | canonical; `gh repo view MisterWonderful/mimir` currently resolves to `LivingEthos/mimir` |
 | `gh` auth | `MisterWonderful` | active account; push protocol https |
 
-**Blocking questions (answer before any push/tag):**
-1. **Which repo is canonical** — `LivingEthos/mimir` (current `origin`) or
-   `MisterWonderful/mimir` (per handoff docs)? They disagree.
-2. **Is `v1.0.0` already publicly released?** A `v1.0.0` tag and release-prep
-   commits already exist. If so, **v1.1 should ship as `v1.1.0`, not a re-tag of
-   1.0.0.**
-3. **How to reconcile `origin/main`'s divergence** — `origin/main` (ab22d48) has
-   commits not in v1.1, and v1.1 has 50 commits not in it. Merge v1.1 into it,
-   rebase v1.1 onto it, or is `origin/main` stale and local `main` authoritative?
+**Decisions from current evidence:**
 
-## Recommended release path (once the above are answered)
+1. Canonical repo is `LivingEthos/mimir`.
+2. `v1.0.0` is already public, so this release should ship as `v1.1.0`.
+3. `origin/main` is authoritative. It has been merged into
+   `v1.1/reversible-compression` locally; the remaining release path should use
+   `origin/main` as the PR base.
 
-Assuming canonical repo confirmed, `origin/main` reconciled, and shipping as
-`v1.1.0`:
+## Recommended release path
 
-1. `git fetch origin` and reconcile `main` with `origin/main` (merge or reset to
-   the agreed authoritative state).
-2. Open a PR `v1.1/reversible-compression → main` (or fast-forward if local main
-   is authoritative): `gh pr create` — body below.
+1. Push `v1.1/reversible-compression` to `LivingEthos/mimir`.
+2. Open a PR `v1.1/reversible-compression → main`: `gh pr create` — body below.
 3. Green CI on the merge commit.
 4. `git tag v1.1.0 <merge-commit>` and push the tag.
 5. cargo-dist builds release artifacts; create the GitHub release; upload assets.
@@ -66,11 +64,17 @@ Assuming canonical repo confirmed, `origin/main` reconciled, and shipping as
 > Validated on MiniMax-M2.7 (50-case set): compression preserves answer quality
 > (delta within noise) while cutting provider-reported input tokens ~54%.
 >
-> Full `validate-production.sh` green; v1.0 release machinery untouched. Deferred:
-> live retrieve loop (needs multi-turn replay), tree-sitter skeletons. See
-> `docs/HANDOFF-v1.1-followups.md` and `docs/eval-results-rcc-v1.1.md`.
+> Also hardens provider repair patch application: unified diffs are located by
+> pre-image context instead of trusting loose line numbers, run-owned artifacts
+> are checked before repair apply, and disabled Studio mode labels were removed.
+>
+> Full `validate-production.sh` was green on the RCC/eval tip, with focused
+> validation green after final repair hardening. v1.0 release machinery remains
+> untouched. Deferred: live retrieve loop (needs multi-turn replay),
+> tree-sitter skeletons. See `docs/HANDOFF-v1.1-followups.md` and
+> `docs/eval-results-rcc-v1.1.md`.
 
-## Not done here (deliberately)
+## Not done yet
 
-- No `git push`, no tag, no GitHub release, no Homebrew change. These wait on the
-  three blocking questions and explicit go-ahead.
+- No tag, no GitHub release, no Homebrew change yet. These wait on PR merge,
+  green CI, and cargo-dist release assets.
