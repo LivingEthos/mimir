@@ -12,8 +12,9 @@ tied to green CI / release assets.
   tip (fmt, `clippy --workspace -D warnings`, full test suite, doctests,
   release build, gateway-boundary, `cargo audit`, `cargo deny`, SDK
   generate/drift/build, CLI wrapper checks, and validate:examples).
-- v1.0 release machinery untouched by v1.1 (`dist-workspace.toml`,
-  `HomebrewFormula/`, `packages/cli/` unchanged).
+- Release metadata is aligned to `v1.1.0` and canonical `LivingEthos/mimir`
+  URLs (`crates/mimir-cli`, private npm package manifests, SDK metadata,
+  Homebrew formula placeholders, and release scripts).
 - RCC thesis validated on a real provider (MiniMax-M2.7): compression preserves
   answer quality while cutting input tokens ~54% — see
   [`eval-results-rcc-v1.1.md`](eval-results-rcc-v1.1.md).
@@ -65,9 +66,11 @@ tied to green CI / release assets.
 > pre-image context instead of trusting loose line numbers, run-owned artifacts
 > are checked before repair apply, and disabled Studio mode labels were removed.
 >
-> Full `validate-production.sh` is green on the final reconciled tip. v1.0
-> release machinery remains untouched. Deferred: live retrieve loop (needs
-> multi-turn replay), tree-sitter skeletons. See
+> Full `validate-production.sh` is green on the final v1.1.0 release tip.
+> Package and Homebrew metadata now target `LivingEthos/mimir` / `v1.1.0`;
+> Homebrew checksums remain placeholders until cargo-dist release archives are
+> staged. Deferred: live retrieve loop (needs multi-turn replay), tree-sitter
+> skeletons. See
 > `docs/HANDOFF-v1.1-followups.md` and `docs/eval-results-rcc-v1.1.md`.
 
 ## Not done yet
