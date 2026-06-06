@@ -19,7 +19,8 @@ use mimir_edit::{
 use mimir_providers::adapters::anthropic::AnthropicAdapter;
 use mimir_providers::{
     OpenAiCompatibleAdapter, ProviderDispatchAdapter, ProviderGateway, ProviderRequest,
-    ProviderResponse, ResponseBlock, TokenUsage, ValidatedPacket, ValidatedProviderRequest,
+    ProviderResponse, ResponseBlock, TokenUsage, ToolSchema, ValidatedPacket,
+    ValidatedProviderRequest,
 };
 use mimir_runs::{atomic_write, RunDir, RunId};
 use mimir_schemas::{
@@ -27,6 +28,7 @@ use mimir_schemas::{
     PatchStep,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tracing::info;
 
 const MAX_PROVIDER_RESPONSE_ARTIFACT_BYTES: usize = 256 * 1024;
@@ -55,6 +57,7 @@ const KNOWN_COMMAND_RECIPE_TOOLS: &[&str] = &[
     "run_tests",
     "search_code",
 ];
+const RETRIEVE_TOOL_NAME: &str = "retrieve";
 
 #[derive(Parser)]
 #[command(name = "mimir")]
@@ -103,6 +106,9 @@ enum Commands {
         /// Override provider API base URL.
         #[arg(long)]
         base_url: Option<String>,
+        /// Advertise the bounded retrieve tool schema to the model.
+        #[arg(long)]
+        enable_retrieve: bool,
         /// Output JSON instead of human-readable text.
         #[arg(long)]
         json: bool,
@@ -138,6 +144,9 @@ enum Commands {
         /// Override provider API base URL.
         #[arg(long)]
         base_url: Option<String>,
+        /// Advertise the bounded retrieve tool schema to the model.
+        #[arg(long)]
+        enable_retrieve: bool,
         /// Validate and persist the patch without changing the working tree.
         #[arg(long)]
         dry_run: bool,
@@ -380,6 +389,16 @@ enum ContextCmd {
         /// Run ID.
         run_id: String,
     },
+    /// Expand the verbatim original of a compressed or omitted candidate.
+    Expand {
+        /// Run ID.
+        run_id: String,
+        /// File path or source hash to look up.
+        target: String,
+        /// Output JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Suggest starting context for a task without calling a provider.
     Suggest {
         /// Task or question to map.
@@ -485,6 +504,21 @@ enum EvalCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Run provider-backed answer-quality eval (requires API key).
+    Answer {
+        /// Provider to call.
+        #[arg(long, default_value = "glm")]
+        provider: String,
+        /// Model to call.
+        #[arg(long)]
+        model: Option<String>,
+        /// Dataset YAML path.
+        #[arg(long)]
+        dataset: String,
+        /// Arms to compare (comma-separated).
+        #[arg(long, default_value = "verbatim,compressed")]
+        compare: String,
+    },
 }
 
 fn default_model(provider: &str) -> &'static str {
@@ -501,6 +535,46 @@ fn normalized_provider(provider: &str) -> String {
         "zai" => "glm".to_string(),
         other => other.to_string(),
     }
+}
+
+/// Whether an API key for the given provider is present in the environment.
+///
+/// Mirrors the env vars read by the provider adapters; used to report whether
+/// live answer grading *could* run, without ever reading the key value.
+fn answer_provider_key_present(provider: &str) -> bool {
+    let vars: &[&str] = match provider {
+        "anthropic" => &["ANTHROPIC_API_KEY"],
+        "glm" | "zai" => &["GLM_API_KEY", "ZAI_API_KEY"],
+        "openai" | "openai-compatible" => &["OPENAI_API_KEY"],
+        _ => &[],
+    };
+    vars.iter()
+        .any(|var| std::env::var_os(var).is_some_and(|value| !value.is_empty()))
+}
+
+fn parse_answer_compare(compare: &str) -> Result<Vec<String>> {
+    let mut arms = Vec::new();
+    let mut seen = BTreeSet::new();
+    for arm in compare
+        .split(',')
+        .map(str::trim)
+        .filter(|arm| !arm.is_empty())
+    {
+        match arm {
+            "verbatim" | "compressed" => {
+                if seen.insert(arm.to_string()) {
+                    arms.push(arm.to_string());
+                }
+            }
+            other => bail!(
+                "unsupported answer eval arm '{other}'; expected 'verbatim' and/or 'compressed'"
+            ),
+        }
+    }
+    if arms.is_empty() {
+        bail!("answer eval compare list is empty; expected 'verbatim' and/or 'compressed'");
+    }
+    Ok(arms)
 }
 
 fn build_packet(
@@ -857,6 +931,129 @@ fn browser_open_command(url: &str) -> ProcessCommand {
         command.arg(url);
         command
     }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+#[derive(Debug, Clone, Copy)]
+enum OriginalResolutionMode {
+    /// Preserve `mimir context expand` behavior: compressed items, omitted
+    /// originals, and already-included worktree files are all expandable.
+    CliExpand,
+    /// Model-callable retrieval must only return stored originals from this
+    /// run, never arbitrary worktree reads.
+    #[allow(dead_code)]
+    StoredOriginalOnly,
+}
+
+fn resolve_run_original(
+    run_dir: &RunDir,
+    packet: &mimir_schemas::ContextPacket,
+    target: &str,
+    mode: OriginalResolutionMode,
+) -> Result<String> {
+    let found = packet.included.iter().find(|item| {
+        item.path == target
+            || item.source_hash == target
+            || item
+                .compression
+                .as_ref()
+                .map(|c| c.original_hash == target)
+                .unwrap_or(false)
+    });
+
+    let (artifact_path, original_hash) = if let Some(item) = found {
+        if let Some(ref compression) = item.compression {
+            (
+                Some(camino::Utf8PathBuf::from(
+                    &compression.original_artifact_path,
+                )),
+                compression.original_hash.clone(),
+            )
+        } else if matches!(mode, OriginalResolutionMode::CliExpand) {
+            let workspace_path = Path::new(".").join(&item.path);
+            (
+                Some(camino::Utf8PathBuf::from_path_buf(workspace_path).unwrap_or_default()),
+                item.source_hash.clone(),
+            )
+        } else {
+            bail!(
+                "{} is already present in the packet; retrieve only serves stored originals",
+                target
+            );
+        }
+    } else {
+        let omitted = packet
+            .omitted_candidates
+            .iter()
+            .find(|item| item.path == target || item.source_hash.as_deref() == Some(target));
+        if let Some(item) = omitted {
+            if let Some(ref hash) = item.source_hash {
+                let artifact_name = format!("{}.orig", hash);
+                (
+                    Some(run_dir.artifacts_path().join(artifact_name)),
+                    hash.clone(),
+                )
+            } else {
+                bail!("No stored original for omitted candidate {}", target);
+            }
+        } else {
+            bail!("{} not found in run {}", target, packet.run_id);
+        }
+    };
+
+    let artifact_path = artifact_path.ok_or_else(|| anyhow!("no artifact path resolved"))?;
+    let bytes = fs::read(artifact_path.as_std_path())
+        .map_err(|e| anyhow!("failed to read artifact: {}", e))?;
+    let actual_hash = sha256_hex(&bytes);
+    if actual_hash != original_hash {
+        bail!(
+            "hash mismatch: expected {} but artifact has {} — possible tampering",
+            original_hash,
+            actual_hash
+        );
+    }
+
+    let content = String::from_utf8_lossy(&bytes).to_string();
+    if contains_secret_like_text(&content) {
+        bail!("expand refused: content contains secret-like material");
+    }
+
+    Ok(content)
+}
+
+fn run_context_expand(run_id: &str, target: &str, json: bool) -> Result<()> {
+    let parsed_run_id =
+        RunId::parse(run_id.to_string()).map_err(|_| anyhow!("invalid run id: {}", run_id))?;
+    let mimir_root = camino::Utf8PathBuf::from(".mimir");
+    let run_dir = RunDir::open(&mimir_root, &parsed_run_id)
+        .map_err(|_| anyhow!("run {} not found", run_id))?;
+    let packet_path = run_dir.context_packet_path();
+    let packet: mimir_schemas::ContextPacket = serde_json::from_str(
+        &fs::read_to_string(packet_path.as_std_path())
+            .map_err(|_| anyhow!("packet not found for run {}", run_id))?,
+    )
+    .map_err(|_| anyhow!("invalid packet for run {}", run_id))?;
+
+    let content =
+        resolve_run_original(&run_dir, &packet, target, OriginalResolutionMode::CliExpand)?;
+
+    if json {
+        let output = serde_json::json!({
+            "run_id": run_id,
+            "target": target,
+            "content": content,
+            "hash_verified": true,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("{}", content);
+    }
+    Ok(())
 }
 
 fn run_context_suggest_command(
@@ -1395,6 +1592,45 @@ fn request_from_packet(
     mimir_session::packet::provider_request_from_packet(camino::Utf8Path::new("."), packet, stream)
 }
 
+fn retrieve_tool_schema() -> ToolSchema {
+    ToolSchema {
+        name: RETRIEVE_TOOL_NAME.to_string(),
+        description: Some(
+            "Retrieve the hash-verified original text for a compressed or omitted item already recorded in this run's context packet.".to_string(),
+        ),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "Workspace-relative path or source hash from this run's context packet."
+                }
+            },
+            "required": ["target"],
+            "additionalProperties": false
+        }),
+    }
+}
+
+fn attach_retrieve_tool_schema(request: &mut ProviderRequest) {
+    let tools = request.tools.get_or_insert_with(Vec::new);
+    if !tools.iter().any(|tool| tool.name == RETRIEVE_TOOL_NAME) {
+        tools.push(retrieve_tool_schema());
+    }
+}
+
+fn fail_closed_on_tool_use(response: &ProviderResponse) -> Result<()> {
+    if let Some((name, _id)) = response.content.iter().find_map(|block| match block {
+        ResponseBlock::ToolUse { name, id, .. } => Some((name, id)),
+        ResponseBlock::Text { .. } => None,
+    }) {
+        bail!(
+            "provider requested tool '{name}', but the retrieve tool loop is not yet wired; failing closed"
+        );
+    }
+    Ok(())
+}
+
 fn validate_packet_for_dispatch(
     packet: &mimir_schemas::ContextPacket,
     request: ProviderRequest,
@@ -1556,6 +1792,126 @@ fn response_text(response: &ProviderResponse) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn answer_case_workspace_root(
+    case: &mimir_eval::answer_eval::AnswerQualityCase,
+) -> Result<camino::Utf8PathBuf> {
+    let path = fs::canonicalize(&case.repo_path).map_err(|error| {
+        anyhow!(
+            "failed to resolve repo_path '{}' for answer eval case '{}': {error}",
+            case.repo_path,
+            case.id
+        )
+    })?;
+    camino::Utf8PathBuf::from_path_buf(path).map_err(|path| {
+        anyhow!(
+            "repo_path '{}' for answer eval case '{}' is not UTF-8: {}",
+            case.repo_path,
+            case.id,
+            path.display()
+        )
+    })
+}
+
+fn run_live_answer_quality_eval(
+    dataset: &mimir_eval::answer_eval::AnswerQualityDataset,
+    provider: &str,
+    model: &str,
+    arms: &[String],
+) -> Result<mimir_eval::answer_eval::AnswerQualitySummary> {
+    let mut arm_results: BTreeMap<String, Vec<mimir_eval::answer_eval::AnswerQualityRun>> =
+        arms.iter().map(|arm| (arm.clone(), Vec::new())).collect();
+    // A live run is dozens-to-hundreds of provider calls; a single transient
+    // failure must not discard every result collected so far. Record and skip.
+    let mut failures = 0usize;
+
+    for case in &dataset.cases {
+        let workspace_root = match answer_case_workspace_root(case) {
+            Ok(root) => root,
+            Err(error) => {
+                eprintln!(
+                    "answer eval: skipping case '{}' (workspace error): {error}",
+                    case.id
+                );
+                failures += 1;
+                continue;
+            }
+        };
+        let (verbatim, compressed) =
+            match mimir_eval::answer_eval::build_answer_packets(case, provider, model) {
+                Ok(packets) => packets,
+                Err(error) => {
+                    eprintln!(
+                        "answer eval: skipping case '{}' (packet build error): {error}",
+                        case.id
+                    );
+                    failures += 1;
+                    continue;
+                }
+            };
+
+        for arm in arms {
+            let packet = match arm.as_str() {
+                "verbatim" => &verbatim,
+                "compressed" => &compressed,
+                _ => unreachable!("answer eval arm validated by parse_answer_compare"),
+            };
+            let request = match mimir_session::packet::provider_request_from_packet(
+                &workspace_root,
+                packet,
+                false,
+            ) {
+                Ok(request) => request,
+                Err(error) => {
+                    eprintln!(
+                        "answer eval: skipping case '{}' arm '{}' (request build error): {error}",
+                        case.id, arm
+                    );
+                    failures += 1;
+                    continue;
+                }
+            };
+            let response =
+                match call_provider_with_request(packet, request, false, false, None, None) {
+                    Ok(response) => response,
+                    Err(error) => {
+                        eprintln!(
+                            "answer eval: skipping case '{}' arm '{}' (dispatch error): {error}",
+                            case.id, arm
+                        );
+                        failures += 1;
+                        continue;
+                    }
+                };
+            let answer = response_text(&response);
+            let correct =
+                mimir_eval::answer_eval::grade_answer(&answer, &case.gold_answer, &case.grading);
+            arm_results
+                .get_mut(arm)
+                .expect("answer eval arm result bucket exists")
+                .push(mimir_eval::answer_eval::AnswerQualityRun {
+                    case_id: case.id.clone(),
+                    arm: arm.clone(),
+                    answer,
+                    correct,
+                    tokens_in: response.usage.input_tokens,
+                    provider: provider.to_string(),
+                    model: model.to_string(),
+                });
+        }
+    }
+
+    if failures > 0 {
+        eprintln!(
+            "answer eval: {failures} case/arm dispatch(es) failed and were excluded from the summary"
+        );
+    }
+
+    Ok(mimir_eval::answer_eval::AnswerQualitySummary {
+        dataset_id: dataset.id.clone(),
+        arm_results,
+    })
 }
 
 fn write_provider_artifacts(run_dir: &RunDir, response: &ProviderResponse) -> Result<()> {
@@ -1933,6 +2289,7 @@ struct CodeCommandOptions {
     provider: String,
     model: Option<String>,
     base_url: Option<String>,
+    enable_retrieve: bool,
     dry_run: bool,
     json: bool,
 }
@@ -1998,17 +2355,24 @@ struct CommandRecipeExecution {
     expanded_task: String,
 }
 
-fn plan_request_from_packet(packet: &mimir_schemas::ContextPacket) -> Result<ProviderRequest> {
+fn plan_request_from_packet(
+    packet: &mimir_schemas::ContextPacket,
+    enable_retrieve: bool,
+) -> Result<ProviderRequest> {
     let prompt = format!(
         "Generate a production implementation plan for the task using the replayable context below.\n\nReturn only JSON with this shape:\n{{\"steps\":[\"concise ordered step\"],\"risks\":[\"risk\"],\"files_likely_affected\":[\"relative/path\"],\"tests_to_run\":[\"command\"],\"assumptions\":[\"assumption\"]}}\n\nKeep steps concise and actionable. Do not include markdown.\n\n{}",
         context_prompt(packet)?
     );
-    Ok(request_from_packet_with_prompt(
+    let mut request = request_from_packet_with_prompt(
         packet,
         "You are Mimir Planner. Produce concise, structured, replayable implementation plans and call out uncertainty explicitly.",
         prompt,
         4096,
-    ))
+    );
+    if enable_retrieve {
+        attach_retrieve_tool_schema(&mut request);
+    }
+    Ok(request)
 }
 
 fn code_request_from_packet(
@@ -2017,6 +2381,7 @@ fn code_request_from_packet(
     max_repair_turns: u32,
     cost_cap: f64,
     output_budget_tokens: Option<u32>,
+    enable_retrieve: bool,
 ) -> Result<ProviderRequest> {
     let editable_json = serde_json::to_string(editable).unwrap_or_else(|_| "[]".to_string());
     let prompt = format!(
@@ -2026,12 +2391,16 @@ fn code_request_from_packet(
         packet.packet_id,
         context_prompt(packet)?
     );
-    Ok(request_from_packet_with_prompt(
+    let mut request = request_from_packet_with_prompt(
         packet,
         "You are Mimir Code. Produce only safe, minimal PatchPlan JSON. Never propose edits outside the editable target set.",
         prompt,
         output_budget_tokens.unwrap_or(packet.output_reserve_tokens),
-    ))
+    );
+    if enable_retrieve {
+        attach_retrieve_tool_schema(&mut request);
+    }
+    Ok(request)
 }
 
 fn parse_json_from_response<T>(text: &str) -> Result<T>
@@ -2570,25 +2939,19 @@ fn validate_unified_diff_headers(path: &str, diff: &str) -> Result<()> {
                 );
             }
             saw_hunk = true;
-            let (expected_old, expected_new) = parse_unified_hunk_counts(lines[index])?;
+            // Validate the hunk header *shape* but do NOT enforce its declared
+            // line counts. LLMs routinely miscount the `@@ -a,b +c,d @@` context
+            // lines, and the applier (mimir_edit apply_unified_diff_text) is
+            // content-based — it positions by the new-file start line and matches
+            // context, ignoring the counts entirely. So we recount from the body
+            // (git apply --recount semantics); a genuinely malformed hunk still
+            // fails closed at apply time on a context mismatch. We still require
+            // every body line to be a valid diff line and the hunk to make at
+            // least one change.
+            let _ = parse_unified_hunk_counts(lines[index])?;
             index += 1;
-            let mut old_count = 0usize;
-            let mut new_count = 0usize;
+            let mut change_lines = 0usize;
             while index < lines.len() {
-                let counts_complete = old_count == expected_old && new_count == expected_new;
-                if counts_complete {
-                    if lines[index].starts_with("\\ ") {
-                        index += 1;
-                        continue;
-                    }
-                    if lines[index].starts_with("@@") || is_diff_file_header_at(&lines, index) {
-                        break;
-                    }
-                    bail!(
-                        "unified diff hunk for {path} has extra line after declared range: {}",
-                        lines[index].trim()
-                    );
-                }
                 if lines[index].starts_with("\\ ") {
                     index += 1;
                     continue;
@@ -2597,12 +2960,8 @@ fn validate_unified_diff_headers(path: &str, diff: &str) -> Result<()> {
                     break;
                 }
                 match lines[index].as_bytes().first() {
-                    Some(b' ') => {
-                        old_count += 1;
-                        new_count += 1;
-                    }
-                    Some(b'-') => old_count += 1,
-                    Some(b'+') => new_count += 1,
+                    Some(b' ') => {}
+                    Some(b'-') | Some(b'+') => change_lines += 1,
                     _ => {
                         bail!(
                             "unified diff hunk line for {path} must start with space, '+', '-', or '\\': {}",
@@ -2610,17 +2969,10 @@ fn validate_unified_diff_headers(path: &str, diff: &str) -> Result<()> {
                         );
                     }
                 }
-                if old_count > expected_old || new_count > expected_new {
-                    bail!(
-                        "unified diff hunk for {path} exceeds declared line counts: expected -{expected_old} +{expected_new}, saw -{old_count} +{new_count}"
-                    );
-                }
                 index += 1;
             }
-            if old_count != expected_old || new_count != expected_new {
-                bail!(
-                    "unified diff hunk for {path} has mismatched line counts: expected -{expected_old} +{expected_new}, saw -{old_count} +{new_count}"
-                );
+            if change_lines == 0 {
+                bail!("unified diff hunk for {path} contains no added or removed lines");
             }
         }
         if !saw_hunk {
@@ -3383,6 +3735,42 @@ fn run_code_repair_loop(
         )?;
 
         let files = affected_files(&patch_recipe);
+        if let Err(error) = ensure_run_owned_files_unchanged(ctx.base, run_owned_hashes) {
+            let reason = redacted_message(format!(
+                "repair_run_owned_files_changed_before_apply: {error}"
+            ));
+            turns.push(RepairTurnReport {
+                turn,
+                cost: turn_cost,
+                patch_plan_path: Some(patch_plan_artifact),
+                patch_recipe_path: Some(patch_recipe_artifact),
+                patch_path: Some(patch_artifact),
+                test_result_path: None,
+                test_passed: Some(false),
+                test_exit_code: Some(current_test.exit_code),
+                rejected: Some(reason.clone()),
+            });
+            append_redacted_event(
+                ctx.run_dir,
+                &serde_json::json!({
+                    "event_type": "repair_run_owned_files_changed",
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                    "turn": turn,
+                    "reason": &reason,
+                }),
+            )?;
+            return Ok(repair_outcome(
+                turns,
+                total_cost,
+                reason.clone(),
+                false,
+                "auto_detected".to_string(),
+                None,
+                Some(current_test),
+                Some(reason),
+            ));
+        }
+
         let safety_result = if contains_secret_like_text(&patch_text) {
             Err(anyhow!(
                 "provider repair patch contained secret-like text and was not applied"
@@ -3421,42 +3809,6 @@ fn run_code_repair_loop(
                 ctx.run_dir,
                 &serde_json::json!({
                     "event_type": "repair_patch_rejected",
-                    "timestamp": chrono::Utc::now().to_rfc3339(),
-                    "turn": turn,
-                    "reason": &reason,
-                }),
-            )?;
-            return Ok(repair_outcome(
-                turns,
-                total_cost,
-                reason.clone(),
-                false,
-                "auto_detected".to_string(),
-                None,
-                Some(current_test),
-                Some(reason),
-            ));
-        }
-
-        if let Err(error) = ensure_run_owned_files_unchanged(ctx.base, run_owned_hashes) {
-            let reason = redacted_message(format!(
-                "repair_run_owned_files_changed_before_apply: {error}"
-            ));
-            turns.push(RepairTurnReport {
-                turn,
-                cost: turn_cost,
-                patch_plan_path: Some(patch_plan_artifact),
-                patch_recipe_path: Some(patch_recipe_artifact),
-                patch_path: Some(patch_artifact),
-                test_result_path: None,
-                test_passed: Some(false),
-                test_exit_code: Some(current_test.exit_code),
-                rejected: Some(reason.clone()),
-            });
-            append_redacted_event(
-                ctx.run_dir,
-                &serde_json::json!({
-                    "event_type": "repair_run_owned_files_changed",
                     "timestamp": chrono::Utc::now().to_rfc3339(),
                     "turn": turn,
                     "reason": &reason,
@@ -3898,6 +4250,7 @@ fn run_plan_command(
     provider: String,
     model: Option<String>,
     base_url: Option<String>,
+    enable_retrieve: bool,
     json: bool,
 ) -> Result<()> {
     let provider = normalized_provider(&provider);
@@ -3919,7 +4272,7 @@ fn run_plan_command(
     atomic_write(&run_dir.context_packet_path(), &packet_json)?;
     append_context_build_trace_span(&run_dir, &packet, context_start_us)?;
 
-    let request = plan_request_from_packet(&packet)?;
+    let request = plan_request_from_packet(&packet, enable_retrieve)?;
     write_provider_request_artifact(&run_dir, &request)?;
     let response = match call_provider_with_request(
         &packet,
@@ -3936,6 +4289,10 @@ fn run_plan_command(
         }
     };
     write_provider_artifacts(&run_dir, &response)?;
+    if let Err(error) = fail_closed_on_tool_use(&response) {
+        append_command_trace_span(&run_dir, &packet, "mimir.plan", command_start_us, "error")?;
+        return Err(error);
+    }
 
     let text = response_text(&response);
     let mut plan = plan_artifact_from_response(&packet, &editable, &text);
@@ -4040,6 +4397,7 @@ fn run_code_command(options: CodeCommandOptions) -> Result<()> {
         command_recipe
             .as_ref()
             .map(|recipe| recipe.output_budget_tokens),
+        options.enable_retrieve,
     )?;
     let estimated_initial_cost = estimate_repair_request_cost(&provider, &model, &request);
     if let Some(reason) = initial_cost_preflight_rejection(estimated_initial_cost, options.cost_cap)
@@ -4097,6 +4455,10 @@ fn run_code_command(options: CodeCommandOptions) -> Result<()> {
         }
     };
     write_provider_artifacts(&run_dir, &response)?;
+    if let Err(error) = fail_closed_on_tool_use(&response) {
+        append_command_trace_span(&run_dir, &packet, "mimir.code", command_start_us, "error")?;
+        return Err(error);
+    }
     let initial_cost = estimate_provider_cost(&provider, &response.model, &response.usage);
     if let Some(reason) = provider_response_cost_rejection(initial_cost, options.cost_cap) {
         let reason = redacted_message(reason);
@@ -4695,6 +5057,17 @@ fn main() -> Result<()> {
                 Ok(mimir_context::WhyResult::NotFound) => println!("not found"),
                 Err(error) => println!("Error: {}", error),
             },
+            ContextCmd::Expand {
+                run_id,
+                target,
+                json,
+            } => match run_context_expand(&run_id, &target, json) {
+                Ok(()) => {}
+                Err(error) => {
+                    eprintln!("Error: {}", error);
+                    std::process::exit(1);
+                }
+            },
             ContextCmd::Suggest {
                 task,
                 provider,
@@ -4756,8 +5129,17 @@ fn main() -> Result<()> {
             provider,
             model,
             base_url,
+            enable_retrieve,
             json,
-        } => run_plan_command(task, editable, provider, model, base_url, json)?,
+        } => run_plan_command(
+            task,
+            editable,
+            provider,
+            model,
+            base_url,
+            enable_retrieve,
+            json,
+        )?,
         Commands::Code {
             task,
             editable,
@@ -4769,6 +5151,7 @@ fn main() -> Result<()> {
             provider,
             model,
             base_url,
+            enable_retrieve,
             dry_run,
             json,
         } => run_code_command(CodeCommandOptions {
@@ -4782,6 +5165,7 @@ fn main() -> Result<()> {
             provider,
             model,
             base_url,
+            enable_retrieve,
             dry_run,
             json,
         })?,
@@ -5491,6 +5875,42 @@ fn main() -> Result<()> {
                 output,
                 json,
             } => run_eval_context_command(dataset, cap_tokens, output, json)?,
+            EvalCmd::Answer {
+                provider,
+                model,
+                dataset,
+                compare,
+            } => {
+                let model = model.unwrap_or_else(|| default_model(&provider).to_string());
+                let arms = parse_answer_compare(&compare)?;
+                eprintln!(
+                    "answer-quality eval: provider={provider} model={model} dataset={dataset} arms={compare}"
+                );
+                let ds = mimir_eval::answer_eval::load_answer_dataset(&dataset)?;
+                // Offline, CI-safe core: build both arms and report token savings.
+                let mut report =
+                    mimir_eval::answer_eval::token_savings_report(&ds, &provider, &model)?;
+                if answer_provider_key_present(&provider) {
+                    let summary = run_live_answer_quality_eval(&ds, &provider, &model, &arms)?;
+                    let grading = mimir_eval::answer_eval::summarize(&summary);
+                    let tokens_saved = report["totals"]["tokens_saved"].as_u64().unwrap_or(0);
+                    let accuracy_delta = grading["deltas"]["accuracy_delta"].as_f64();
+                    let accuracy_delta_display = accuracy_delta
+                        .map(|delta| format!("{delta:.4}"))
+                        .unwrap_or_else(|| "n/a".to_string());
+                    if let Some(obj) = report.as_object_mut() {
+                        obj.insert("answer_grading".to_string(), grading);
+                    }
+                    eprintln!(
+                        "answer-quality live summary: tokens_saved={tokens_saved} accuracy_delta={accuracy_delta_display}"
+                    );
+                } else {
+                    eprintln!(
+                        "note: no API key for '{provider}'; reported offline token savings only (answer grading skipped)."
+                    );
+                }
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            }
         },
     }
 
@@ -5513,6 +5933,145 @@ mod tests {
             request_from_packet_with_prompt(&packet, "system", "prompt".to_string(), 64_000);
 
         assert_eq!(request.max_tokens, Some(64_000));
+    }
+
+    #[test]
+    fn retrieve_tool_schema_requires_target() {
+        let schema = retrieve_tool_schema();
+
+        assert_eq!(schema.name, "retrieve");
+        assert_eq!(schema.parameters["required"], serde_json::json!(["target"]));
+        assert_eq!(schema.parameters["additionalProperties"], false);
+    }
+
+    #[test]
+    fn plan_request_only_advertises_retrieve_when_enabled() {
+        let packet = ContextBuilder::new()
+            .provider("anthropic")
+            .model("claude-sonnet-4-6")
+            .build()
+            .unwrap();
+
+        let default_request = plan_request_from_packet(&packet, false).unwrap();
+        let retrieve_request = plan_request_from_packet(&packet, true).unwrap();
+
+        assert!(default_request.tools.is_none());
+        let tools = retrieve_request.tools.unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "retrieve");
+    }
+
+    #[test]
+    fn tool_use_response_fails_closed() {
+        let response = ProviderResponse {
+            content: vec![ResponseBlock::ToolUse {
+                id: "toolu_1".to_string(),
+                name: "retrieve".to_string(),
+                input: serde_json::json!({"target": "src/lib.rs"}),
+            }],
+            usage: TokenUsage::default(),
+            model: "test-model".to_string(),
+            stop_reason: Some("tool_use".to_string()),
+            raw: None,
+        };
+
+        let error = fail_closed_on_tool_use(&response).unwrap_err().to_string();
+
+        assert!(error.contains("failing closed"), "{error}");
+    }
+
+    #[test]
+    fn resolve_run_original_stored_mode_serves_only_stored_originals() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let mimir_root = camino::Utf8PathBuf::from_path_buf(temp.path().join(".mimir")).unwrap();
+        let run_id = RunId::parse("20260101-120000-abcdef23").unwrap();
+        let run_dir = RunDir::create(&mimir_root, &run_id).unwrap();
+        let content = "pub fn stored_original() {}\n";
+        let hash = sha256_hex(content.as_bytes());
+        let artifact_path = run_dir.artifact_path(&format!("{hash}.orig")).unwrap();
+        fs::write(&artifact_path, content).unwrap();
+
+        let packet: mimir_schemas::ContextPacket = serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "packet_id": "pkt-test",
+            "packet_hash": "0".repeat(64),
+            "run_id": run_id.to_string(),
+            "task_card": {
+                "goal": "test",
+                "acceptance_criteria": [],
+                "likely_files": [],
+                "complexity": "tiny"
+            },
+            "mode": "ask",
+            "cap_tokens": 64000,
+            "target_tokens": 32000,
+            "output_reserve_tokens": 4096,
+            "count_drift_reserve_tokens": 512,
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-20250514",
+            "capability_snapshot_ref": "test",
+            "prompt_contract_version": 1,
+            "included": [
+                {
+                    "path": "src/lib.rs",
+                    "ranges": [{"start": 1, "end": 1}],
+                    "candidate_kind": "full_file",
+                    "reason_code": "symbol_definition",
+                    "tokens": 10,
+                    "source_hash": hash,
+                    "trust_level": "trusted",
+                    "editable": false,
+                    "compression": {
+                        "algorithm": "code_skeleton",
+                        "original_tokens": 50,
+                        "compressed_tokens": 10,
+                        "original_hash": hash,
+                        "original_artifact_path": artifact_path.to_string()
+                    }
+                },
+                {
+                    "path": "src/already_in_prompt.rs",
+                    "ranges": [{"start": 1, "end": 1}],
+                    "candidate_kind": "full_file",
+                    "reason_code": "symbol_definition",
+                    "tokens": 1,
+                    "source_hash": "1".repeat(64),
+                    "trust_level": "trusted",
+                    "editable": false
+                }
+            ],
+            "omitted_candidates": [],
+            "tool_schemas": [],
+            "evidence_cards": [],
+            "memory_entries": [],
+            "budget_ledger_ref": ".mimir/runs/20260101-120000-abcdef23/budget_ledger.json",
+            "estimated_input_tokens": 10,
+            "count_provenance": "local_estimate_only",
+            "created_at": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap();
+
+        let resolved = resolve_run_original(
+            &run_dir,
+            &packet,
+            "src/lib.rs",
+            OriginalResolutionMode::StoredOriginalOnly,
+        )
+        .unwrap();
+        let already_in_prompt_error = resolve_run_original(
+            &run_dir,
+            &packet,
+            "src/already_in_prompt.rs",
+            OriginalResolutionMode::StoredOriginalOnly,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert_eq!(resolved, content);
+        assert!(
+            already_in_prompt_error.contains("already present in the packet"),
+            "{already_in_prompt_error}"
+        );
     }
 
     #[test]

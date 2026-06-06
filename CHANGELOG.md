@@ -5,6 +5,22 @@ All notable changes to Mimir are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Reversible Context Compression (RCC)** — deterministic, rule-based compressors (`CodeSkeleton`, `JsonCrush`) in new `mimir-compress` crate. Large files that exceed `compress_threshold_tokens` are compressed rather than omitted; originals are preserved under `.mimir/runs/<run_id>/artifacts/<hash>.orig` and retrievable via `mimir context expand`
+- `mimir context expand <run-id> <path|hash>` — retrieve the verbatim original of a compressed or omitted candidate, hash-verified, fail-closed on mismatch
+- `IncludedItem.compression` metadata field in `ContextPacket` schema (additive, optional, backward-compatible)
+- `TokenPolicy` gains `compression_enabled` (default true) and `compress_threshold_tokens` (default 2048)
+- Answer-quality eval tier `mimir eval answer` — opt-in harness that builds verbatim and compressed packets per case and reports offline input-token savings (CI-safe, no key required; seed fixture at `fixtures/answer-quality-v1.yaml`). Live provider answer-grading is scaffolded but not yet wired (tracked in `V1.1-ROADMAP.md`)
+- ADR-009 documenting reversible context compression design rationale and trade-offs
+- Cache-stability test asserting provider prompt is byte-identical across two builds of the same packet with compression enabled
+- Failure-focused `TestCard` summarization in `mimir-review`: keeps failing test names + first error line per failure, drops passing noise, deterministic ordering
+
+### Changed
+- `ToolResultCard` struct now matches its schema: full fields including `card_id`, `command`, `cwd`, `safety_class`, `timeout_ms`, `duration_ms`, `stdout_preview`, `stderr_preview`, `estimated_tokens`, `inclusion_policy`, plus optional `*_artifact_path` and `*_original_size_bytes`
+- `created_at` in `ContextPacket` is now derived from the explicit `run_id` timestamp when available, making `packet_hash` stable across rebuilds
+
+## [v1.0.0] - 2026-05-22
+
+### Added
 - Criterion performance harness: 5 benches (`packet_build`, `repo_index`, `token_count`, `init_and_doctor`, `render_frame`) with committed median baselines in `bench/baselines.json` and measured-vs-representative notes in `docs/perf.md`
 - Deterministic perf-regression guard `crates/mimir-core/tests/perf_regression.rs` — asserts every committed baseline is at or below its target without running a bench (CI-safe, never flaky), backed by the slow timing gate `scripts/check-perf-regression.sh`
 - Cap-compliance gate `crates/mimir-eval/tests/cap_compliance.rs` — runs the full 15-case `context-recall-v1` fixture across every mode (0, 2, 3, 4, 5) and asserts every built packet stays at or below the 64000-token cap

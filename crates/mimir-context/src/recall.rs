@@ -316,6 +316,7 @@ mod tests {
             source_hash: "0".repeat(64),
             trust_level: "trusted".to_string(),
             editable: false,
+            compression: None,
         }
     }
 

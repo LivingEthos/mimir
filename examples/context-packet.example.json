@@ -55,6 +55,23 @@
       "source_hash": "d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4",
       "trust_level": "trusted",
       "editable": false
+    },
+    {
+      "path": "src/utils/helpers.ts",
+      "ranges": [{ "start": 1, "end": 340 }],
+      "candidate_kind": "full_file",
+      "reason_code": "symbol_definition",
+      "tokens": 1200,
+      "source_hash": "e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5",
+      "trust_level": "trusted",
+      "editable": false,
+      "compression": {
+        "algorithm": "code_skeleton",
+        "original_tokens": 5200,
+        "compressed_tokens": 1200,
+        "original_hash": "e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5",
+        "original_artifact_path": ".mimir/runs/20260518-141522-a3f9b2c1/artifacts/e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5.orig"
+      }
     }
   ],
   "omitted_candidates": [

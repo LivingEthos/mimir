@@ -738,60 +738,169 @@ fn path_not_editable(path: &str) -> EditError {
     }
 }
 
-/// Apply a unified diff to original text (simplified implementation).
+/// Apply a unified diff to original text by locating each hunk from its
+/// pre-image context instead of trusting the hunk header line number.
 fn apply_unified_diff_text(original: &str, diff: &str) -> std::result::Result<String, String> {
     let mut result_lines: Vec<String> = original.lines().map(String::from).collect();
-    let mut line_idx = 0usize;
-    let mut in_hunk = false;
+    let hunks = parse_unified_hunks(diff)?;
+    let mut search_start = 0usize;
+    let mut line_offset = 0isize;
 
-    for line in diff.lines() {
-        if line.starts_with("@@") {
-            in_hunk = true;
-            if let Some(start_pos) = line.find('+') {
-                let after_plus = &line[start_pos + 1..];
-                if let Some(comma_pos) = after_plus.find(',') {
-                    let start_str = &after_plus[..comma_pos];
-                    if let Ok(start) = start_str.parse::<i64>() {
-                        line_idx = (start - 1).max(0) as usize;
-                    }
-                } else if let Some(end_pos) = after_plus.find(' ') {
-                    let start_str = &after_plus[..end_pos];
-                    if let Ok(start) = start_str.parse::<i64>() {
-                        line_idx = (start - 1).max(0) as usize;
-                    }
-                }
-            }
-        } else if in_hunk {
-            if line.starts_with('-') && !line.starts_with("---") {
-                if line_idx < result_lines.len() {
-                    result_lines.remove(line_idx);
-                }
-            } else if line.starts_with('+') && !line.starts_with("+++") {
-                let content = &line[1..];
-                result_lines.insert(line_idx, content.to_string());
-                line_idx += 1;
-            } else if !line.starts_with("---") && !line.starts_with("+++") {
-                // Context line — strip leading space if present
-                let content = if let Some(stripped) = line.strip_prefix(' ') {
-                    stripped
-                } else {
-                    line
-                };
-                if line_idx < result_lines.len() && result_lines[line_idx] == content {
-                    line_idx += 1;
-                } else if !content.trim().is_empty() {
-                    return Err(format!(
-                        "context mismatch at line {}: expected '{}', got '{}'",
-                        line_idx + 1,
-                        content,
-                        result_lines.get(line_idx).map_or("<eof>", |s| s.as_str())
-                    ));
-                }
-            }
-        }
+    for hunk in hunks {
+        let location = locate_hunk(&result_lines, &hunk, search_start, line_offset)?;
+        result_lines.splice(
+            location..location + hunk.old_lines.len(),
+            hunk.new_lines.iter().cloned(),
+        );
+        search_start = location + hunk.new_lines.len();
+        line_offset += hunk.new_lines.len() as isize - hunk.old_lines.len() as isize;
     }
 
     Ok(result_lines.join("\n"))
+}
+
+#[derive(Debug)]
+struct UnifiedHunk {
+    header: String,
+    old_start: usize,
+    old_lines: Vec<String>,
+    new_lines: Vec<String>,
+}
+
+fn parse_unified_hunks(diff: &str) -> std::result::Result<Vec<UnifiedHunk>, String> {
+    let mut hunks = Vec::new();
+    let mut current: Option<UnifiedHunk> = None;
+
+    for line in diff.lines() {
+        if line.starts_with("@@") {
+            if let Some(hunk) = current.take() {
+                hunks.push(hunk);
+            }
+            current = Some(UnifiedHunk {
+                header: line.to_string(),
+                old_start: parse_hunk_old_start(line)?,
+                old_lines: Vec::new(),
+                new_lines: Vec::new(),
+            });
+            continue;
+        }
+
+        let Some(hunk) = current.as_mut() else {
+            continue;
+        };
+
+        if line.starts_with('\\') {
+            continue;
+        }
+
+        if let Some(content) = line.strip_prefix(' ') {
+            hunk.old_lines.push(content.to_string());
+            hunk.new_lines.push(content.to_string());
+        } else if let Some(content) = line.strip_prefix('-') {
+            hunk.old_lines.push(content.to_string());
+        } else if let Some(content) = line.strip_prefix('+') {
+            hunk.new_lines.push(content.to_string());
+        } else {
+            return Err(format!("invalid unified diff hunk line: {line}"));
+        }
+    }
+
+    if let Some(hunk) = current {
+        hunks.push(hunk);
+    }
+
+    if hunks.is_empty() {
+        return Err("unified diff contains no hunks".to_string());
+    }
+
+    Ok(hunks)
+}
+
+fn parse_hunk_old_start(header: &str) -> std::result::Result<usize, String> {
+    let old_range = header
+        .split_whitespace()
+        .find_map(|part| part.strip_prefix('-'))
+        .ok_or_else(|| format!("invalid unified diff hunk header: {header}"))?;
+    let start = old_range
+        .split_once(',')
+        .map_or(old_range, |(start, _)| start);
+    start
+        .parse::<usize>()
+        .map_err(|_| format!("invalid unified diff hunk header: {header}"))
+}
+
+fn locate_hunk(
+    lines: &[String],
+    hunk: &UnifiedHunk,
+    search_start: usize,
+    line_offset: isize,
+) -> std::result::Result<usize, String> {
+    if hunk.old_lines.is_empty() {
+        let location = adjusted_hunk_start(hunk.old_start, true, line_offset);
+        return if location <= lines.len() {
+            Ok(location)
+        } else {
+            Err(format!(
+                "hunk insertion point out of bounds for {}: line {} in {} line file",
+                hunk.header,
+                location + 1,
+                lines.len()
+            ))
+        };
+    }
+
+    let old_len = hunk.old_lines.len();
+    if old_len > lines.len() {
+        return Err(format!(
+            "hunk context not found for {}: expected {} pre-image lines, file has {} lines",
+            hunk.header,
+            old_len,
+            lines.len()
+        ));
+    }
+
+    let candidates: Vec<usize> = (0..=lines.len() - old_len)
+        .filter(|start| lines[*start..*start + old_len] == hunk.old_lines[..])
+        .collect();
+
+    if candidates.is_empty() {
+        return Err(format!("hunk context not found for {}", hunk.header));
+    }
+
+    let pool: Vec<usize> = candidates
+        .iter()
+        .copied()
+        .filter(|candidate| *candidate >= search_start)
+        .collect();
+    if pool.is_empty() {
+        return Err(format!(
+            "hunk context not found after prior hunk for {}",
+            hunk.header
+        ));
+    }
+
+    let expected = adjusted_hunk_start(hunk.old_start, false, line_offset);
+    if pool.contains(&expected) {
+        return Ok(expected);
+    }
+    if pool.len() == 1 {
+        return Ok(pool[0]);
+    }
+
+    Err(format!(
+        "ambiguous hunk context for {}: matched {} locations",
+        hunk.header,
+        pool.len()
+    ))
+}
+
+fn adjusted_hunk_start(old_start: usize, empty_preimage: bool, line_offset: isize) -> usize {
+    let base = if empty_preimage {
+        old_start as isize
+    } else {
+        old_start.saturating_sub(1) as isize
+    };
+    (base + line_offset).max(0) as usize
 }
 
 #[cfg(test)]
@@ -1118,6 +1227,97 @@ mod tests {
         apply_step(&dir, &step, ["test.txt"]).unwrap();
         let result = read_file(&dir, "test.txt");
         assert_eq!(result, "line1\nline2_modified\nline3");
+    }
+
+    #[test]
+    fn test_apply_unified_diff_finds_hunk_by_context_when_header_line_is_wrong() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir, "test.txt", "line1\nline2\nline3\nline4\n");
+
+        let diff = "--- a/test.txt\n+++ b/test.txt\n@@ -1,3 +1,3 @@\n line2\n-line3\n+line3_modified\n line4\n";
+
+        let step = PatchStep::UnifiedDiff {
+            path: "test.txt".into(),
+            diff: diff.into(),
+        };
+
+        apply_step(&dir, &step, ["test.txt"]).unwrap();
+        let result = read_file(&dir, "test.txt");
+        assert_eq!(result, "line1\nline2\nline3_modified\nline4");
+    }
+
+    #[test]
+    fn test_apply_unified_diff_rejects_missing_context_without_write() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir, "test.txt", "line1\nline2\nline3\n");
+
+        let diff = "--- a/test.txt\n+++ b/test.txt\n@@ -1,3 +1,3 @@\n missing\n-line2\n+line2_modified\n line3\n";
+
+        let step = PatchStep::UnifiedDiff {
+            path: "test.txt".into(),
+            diff: diff.into(),
+        };
+
+        let err = apply_step(&dir, &step, ["test.txt"]).unwrap_err();
+        assert!(matches!(err, EditError::DiffApplyFailed { .. }));
+        assert_eq!(read_file(&dir, "test.txt"), "line1\nline2\nline3\n");
+    }
+
+    #[test]
+    fn test_apply_unified_diff_searches_sparse_hunk_by_removed_line() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir, "test.txt", "line1\nline2\nline3\n");
+
+        let diff = "--- a/test.txt\n+++ b/test.txt\n@@ -1 +1 @@\n-line3\n+line3_modified\n";
+
+        let step = PatchStep::UnifiedDiff {
+            path: "test.txt".into(),
+            diff: diff.into(),
+        };
+
+        apply_step(&dir, &step, ["test.txt"]).unwrap();
+        let result = read_file(&dir, "test.txt");
+        assert_eq!(result, "line1\nline2\nline3_modified");
+    }
+
+    #[test]
+    fn test_apply_unified_diff_rejects_ambiguous_context() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir, "test.txt", "target\nkeep\nmiddle\ntarget\nkeep\n");
+
+        let diff = "--- a/test.txt\n+++ b/test.txt\n@@ -9,2 +9,2 @@\n-target\n+changed\n keep\n";
+
+        let step = PatchStep::UnifiedDiff {
+            path: "test.txt".into(),
+            diff: diff.into(),
+        };
+
+        let err = apply_step(&dir, &step, ["test.txt"]).unwrap_err();
+        assert!(matches!(err, EditError::DiffApplyFailed { .. }));
+        assert_eq!(
+            read_file(&dir, "test.txt"),
+            "target\nkeep\nmiddle\ntarget\nkeep\n"
+        );
+    }
+
+    #[test]
+    fn test_apply_unified_diff_rejects_out_of_order_hunks() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir, "test.txt", "target\nkeep\nmiddle\ntarget\nkeep\n");
+
+        let diff = "--- a/test.txt\n+++ b/test.txt\n@@ -4,2 +4,2 @@\n-target\n+changed_late\n keep\n@@ -1,2 +1,2 @@\n-target\n+changed_early\n keep\n";
+
+        let step = PatchStep::UnifiedDiff {
+            path: "test.txt".into(),
+            diff: diff.into(),
+        };
+
+        let err = apply_step(&dir, &step, ["test.txt"]).unwrap_err();
+        assert!(matches!(err, EditError::DiffApplyFailed { .. }));
+        assert_eq!(
+            read_file(&dir, "test.txt"),
+            "target\nkeep\nmiddle\ntarget\nkeep\n"
+        );
     }
 
     #[test]

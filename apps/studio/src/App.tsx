@@ -123,8 +123,6 @@ const fallbackCommandRegistry: CommandMetadata[] = [
   },
 ];
 const preferredCommandChips = ["/help", "/status", "/init", "/context", "/why", "/runs", "/resume"];
-const modes = ["Ask", "Explore", "Plan", "Code", "Review"];
-
 export function App() {
   const [client, setClient] = useState<StudioApiClient | null>(null);
   const [runtimeReady, setRuntimeReady] = useState(false);
@@ -695,14 +693,6 @@ function Header({
           <div className="brand-title">Mimir Studio</div>
           <div className="microcopy">{summary}</div>
         </div>
-      </div>
-
-      <div className="mode-switch" aria-label="Mode">
-        {modes.map((mode) => (
-          <button className={mode === "Explore" ? "mode active" : "mode"} key={mode} type="button">
-            {mode}
-          </button>
-        ))}
       </div>
 
       <div className="status-strip">

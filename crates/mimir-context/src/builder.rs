@@ -4,9 +4,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use mimir_runs::RunId;
+use mimir_runs::{RunDir, RunId};
 use mimir_schemas::{
-    ContextPacket, ContextRange, IncludedItem, OmittedCandidate, RecallGuardFlag, TaskCard,
+    CompressionInfo, ContextPacket, ContextRange, IncludedItem, OmittedCandidate, RecallGuardFlag,
+    TaskCard,
 };
 use sha2::{Digest, Sha256};
 
@@ -21,6 +22,8 @@ pub struct ContextBuilder {
     repo_root: Option<PathBuf>,
     repo_index: Option<Arc<mimir_index::RepoIndex>>,
     edit_targets: Vec<String>,
+    token_policy: Option<crate::policy::TokenPolicy>,
+    mimir_root: Option<PathBuf>,
 }
 
 struct RetrievedContext {
@@ -89,6 +92,18 @@ impl ContextBuilder {
         self
     }
 
+    /// Set token policy (compression, cap, reserves).
+    pub fn token_policy(mut self, policy: crate::policy::TokenPolicy) -> Self {
+        self.token_policy = Some(policy);
+        self
+    }
+
+    /// Set `.mimir` root for artifact writes (defaults to `repo_root/.mimir`).
+    pub fn mimir_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.mimir_root = Some(root.into());
+        self
+    }
+
     /// Build the packet.
     pub fn build(self) -> Result<ContextPacket, anyhow::Error> {
         let run_id = self.run_id.unwrap_or_else(RunId::generate);
@@ -114,12 +129,19 @@ impl ContextBuilder {
         let output_reserve_tokens = model_capabilities.output_reserve_tokens;
         let count_drift_reserve_tokens =
             mimir_providers::capabilities::DEFAULT_COUNT_DRIFT_RESERVE_TOKENS;
+        let policy = self.token_policy.unwrap_or_default();
+        let mimir_root = self
+            .mimir_root
+            .or_else(|| self.repo_root.as_ref().map(|r| r.join(".mimir")));
 
         let retrieved = build_retrieved_context(
             self.repo_root,
             self.repo_index.as_deref(),
             &task_goal,
             &self.edit_targets,
+            &run_id,
+            &policy,
+            mimir_root.as_deref(),
         )?;
         let task_tokens = mimir_providers::count::count_local(&task_goal);
         let estimated_input_tokens = task_tokens
@@ -165,7 +187,7 @@ impl ContextBuilder {
             budget_ledger_ref: format!(".mimir/runs/{run_id}/budget_ledger.json"),
             estimated_input_tokens,
             count_provenance: "local_estimate_only".to_string(),
-            created_at: chrono::Utc::now().to_rfc3339(),
+            created_at: run_id_to_created_at(run_id.as_str()),
             authoritative_input_tokens: None,
             recall_guard_flags: retrieved.recall_guard_flags,
         };
@@ -196,6 +218,9 @@ fn build_retrieved_context(
     repo_index: Option<&mimir_index::RepoIndex>,
     task_card: &str,
     edit_targets: &[String],
+    run_id: &RunId,
+    policy: &crate::policy::TokenPolicy,
+    mimir_root: Option<&Path>,
 ) -> Result<RetrievedContext, anyhow::Error> {
     let Some(root) = repo_root else {
         return Ok(RetrievedContext {
@@ -284,7 +309,48 @@ fn build_retrieved_context(
             });
             continue;
         }
-        total_tokens = total_tokens.saturating_add(token_count);
+
+        // Compression logic (deterministic, reversible).
+        let (final_tokens, compression) = if policy.compression_enabled
+            && token_count > policy.compress_threshold_tokens
+        {
+            let language = mimir_index::detect_language(Path::new(&item.path), Some(&content));
+            let compressed = mimir_compress::compress_body(
+                &content,
+                &language,
+                policy.available(),
+                mimir_providers::count::count_local,
+            );
+            let saves_enough = compressed.compressed_tokens <= compressed.original_tokens * 3 / 4;
+            if saves_enough {
+                let artifact_path = write_original_artifact(
+                    mimir_root,
+                    run_id,
+                    &compressed.original_hash,
+                    &content,
+                );
+                let compression_info = artifact_path.map(|path| CompressionInfo {
+                    algorithm: match compressed.algorithm {
+                        mimir_compress::CompressionAlgorithm::None => "none".to_string(),
+                        mimir_compress::CompressionAlgorithm::CodeSkeleton => {
+                            "code_skeleton".to_string()
+                        }
+                        mimir_compress::CompressionAlgorithm::JsonCrush => "json_crush".to_string(),
+                    },
+                    original_tokens: compressed.original_tokens,
+                    compressed_tokens: compressed.compressed_tokens,
+                    original_hash: compressed.original_hash,
+                    original_artifact_path: path,
+                });
+                (compressed.compressed_tokens, compression_info)
+            } else {
+                (token_count, None)
+            }
+        } else {
+            (token_count, None)
+        };
+
+        total_tokens = total_tokens.saturating_add(final_tokens);
         included_paths.insert(item.path.clone());
         included.push(IncludedItem {
             path: item.path.clone(),
@@ -298,34 +364,90 @@ fn build_retrieved_context(
                 .collect(),
             candidate_kind: "full_file".to_string(),
             reason_code: normalize_reason_code(&item.reason_code),
-            tokens: token_count,
+            tokens: final_tokens,
             source_hash,
             trust_level: "trusted".to_string(),
             editable: edit_targets.iter().any(|target| target == &item.path),
+            compression,
         });
     }
 
-    omitted_candidates.extend(
-        pipeline
-            .manifest
-            .omitted
-            .into_iter()
-            .map(|item| OmittedCandidate {
-                schema_version: 1,
-                path: item.path,
-                ranges: Vec::new(),
-                candidate_kind: "full_file".to_string(),
-                reason_code: "embedding_match".to_string(),
-                score: 0.0,
-                features: serde_json::json!({}),
-                estimated_tokens: item.estimated_tokens,
-                discovered_by: vec!["manifest".to_string()],
-                source_hash: None,
-                reason_for_omission: normalize_omission_reason(&item.reason),
-                risk: item.risk.as_deref().and_then(normalize_omission_risk),
-                what_would_trigger_inclusion: omission_trigger(&item.reason),
-            }),
-    );
+    // Attempt to promote budget-exceeded candidates via compression.
+    for item in pipeline.manifest.omitted {
+        if item.reason == "budget_exceeded_mandatory"
+            && policy.compression_enabled
+            && item.estimated_tokens > policy.compress_threshold_tokens
+        {
+            let path = root.join(&item.path);
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let language = mimir_index::detect_language(Path::new(&item.path), Some(&content));
+                let compressed = mimir_compress::compress_body(
+                    &content,
+                    &language,
+                    policy.available(),
+                    mimir_providers::count::count_local,
+                );
+                let saves_enough =
+                    compressed.compressed_tokens <= compressed.original_tokens * 3 / 4;
+                let fits =
+                    total_tokens.saturating_add(compressed.compressed_tokens) <= policy.available();
+                if saves_enough && fits {
+                    let source_hash = sha256_hex(content.as_bytes());
+                    let artifact_path = write_original_artifact(
+                        mimir_root,
+                        run_id,
+                        &compressed.original_hash,
+                        &content,
+                    );
+                    let compression = artifact_path.map(|path| CompressionInfo {
+                        algorithm: match compressed.algorithm {
+                            mimir_compress::CompressionAlgorithm::None => "none".to_string(),
+                            mimir_compress::CompressionAlgorithm::CodeSkeleton => {
+                                "code_skeleton".to_string()
+                            }
+                            mimir_compress::CompressionAlgorithm::JsonCrush => {
+                                "json_crush".to_string()
+                            }
+                        },
+                        original_tokens: compressed.original_tokens,
+                        compressed_tokens: compressed.compressed_tokens,
+                        original_hash: compressed.original_hash,
+                        original_artifact_path: path,
+                    });
+                    total_tokens = total_tokens.saturating_add(compressed.compressed_tokens);
+                    let is_editable = edit_targets.iter().any(|target| target == &item.path);
+                    included_paths.insert(item.path.clone());
+                    included.push(IncludedItem {
+                        path: item.path,
+                        ranges: Vec::new(),
+                        candidate_kind: "full_file".to_string(),
+                        reason_code: "embedding_match".to_string(),
+                        tokens: compressed.compressed_tokens,
+                        source_hash,
+                        trust_level: "trusted".to_string(),
+                        editable: is_editable,
+                        compression,
+                    });
+                    continue;
+                }
+            }
+        }
+        omitted_candidates.push(OmittedCandidate {
+            schema_version: 1,
+            path: item.path,
+            ranges: Vec::new(),
+            candidate_kind: "full_file".to_string(),
+            reason_code: "embedding_match".to_string(),
+            score: 0.0,
+            features: serde_json::json!({}),
+            estimated_tokens: item.estimated_tokens,
+            discovered_by: vec!["manifest".to_string()],
+            source_hash: None,
+            reason_for_omission: normalize_omission_reason(&item.reason),
+            risk: item.risk.as_deref().and_then(normalize_omission_risk),
+            what_would_trigger_inclusion: omission_trigger(&item.reason),
+        });
+    }
 
     let recall_guard_flags = pipeline
         .recall_guard_flags
@@ -407,6 +529,7 @@ fn include_repository_guidance(
             source_hash,
             trust_level: "trusted".to_string(),
             editable: edit_targets.iter().any(|target| target == relative_path),
+            compression: None,
         });
     }
 }
@@ -540,10 +663,41 @@ fn omission_trigger(reason: &str) -> String {
     .to_string()
 }
 
+fn run_id_to_created_at(run_id: &str) -> String {
+    // Run IDs have format YYYYMMDD-HHMMSS-8hex.
+    // Derive created_at from the run ID so explicit run IDs yield deterministic packets.
+    if run_id.len() >= 15 {
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&run_id[..15], "%Y%m%d-%H%M%S") {
+            return chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(naive, chrono::Utc)
+                .to_rfc3339();
+        }
+    }
+    chrono::Utc::now().to_rfc3339()
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("{:x}", hasher.finalize())
+}
+
+fn write_original_artifact(
+    mimir_root: Option<&Path>,
+    run_id: &RunId,
+    original_hash: &str,
+    content: &str,
+) -> Option<String> {
+    let root = mimir_root?;
+    let mimir_utf8 = camino::Utf8PathBuf::from_path_buf(root.to_path_buf()).ok()?;
+    let run_dir = RunDir::create(&mimir_utf8, run_id).ok()?;
+    let artifact_name = format!("{}.orig", original_hash);
+    let artifact_path = run_dir.artifact_path(&artifact_name).ok()?;
+    mimir_runs::atomic_write(&artifact_path, content.as_bytes()).ok()?;
+    Some(format!(
+        ".mimir/runs/{}/artifacts/{}",
+        run_id.as_str(),
+        artifact_name
+    ))
 }
 
 #[cfg(test)]
@@ -752,5 +906,156 @@ mod tests {
         assert!(packet
             .capability_snapshot_ref
             .starts_with("generated:glm/glm-5.1@sha256:"));
+    }
+
+    #[test]
+    fn prompt_is_stable_across_rebuilds_with_compression() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let body = "    let x = 1;\n";
+        let large_file = format!(
+            "pub fn big() {{\n{}\n}}\npub fn small() {{}}\n",
+            body.repeat(800)
+        );
+        std::fs::write(dir.path().join("big.rs"), &large_file).unwrap();
+
+        let mut index = mimir_index::RepoIndex::new();
+        index.add(mimir_index::FileEntry {
+            path: "big.rs".to_string(),
+            language: "rust".to_string(),
+            content_hash: "big".to_string(),
+            token_count: 1,
+            exports: vec!["big".to_string()],
+            imports: Vec::new(),
+        });
+
+        let run_id = RunId("20260101-120000-abcdef12".to_string());
+        let packet1 = ContextBuilder::new()
+            .run_id(run_id.clone())
+            .task_card("big")
+            .repo_root(dir.path())
+            .repo_index(Arc::new(index.clone()))
+            .build()
+            .unwrap();
+        let packet2 = ContextBuilder::new()
+            .run_id(run_id)
+            .task_card("big")
+            .repo_root(dir.path())
+            .repo_index(Arc::new(index))
+            .build()
+            .unwrap();
+
+        // The provider prompt built from both packets must be byte-identical
+        // so that prompt caching (which depends on stable prefix bytes) is not
+        // invalidated by compression.
+        let prompt1 = mimir_session::packet::context_prompt_for_packet(
+            camino::Utf8Path::new(dir.path().to_str().unwrap()),
+            &packet1,
+        )
+        .unwrap();
+        let prompt2 = mimir_session::packet::context_prompt_for_packet(
+            camino::Utf8Path::new(dir.path().to_str().unwrap()),
+            &packet2,
+        )
+        .unwrap();
+        assert_eq!(
+            prompt1, prompt2,
+            "provider prompt must be stable across rebuilds"
+        );
+    }
+
+    #[test]
+    fn packet_hash_stable_across_rebuilds_with_compression() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // Write a file large enough to trigger compression.
+        let body = "    let x = 1;\n";
+        let large_file = format!(
+            "pub fn big() {{\n{}\n}}\npub fn small() {{}}\n",
+            body.repeat(800)
+        );
+        std::fs::write(dir.path().join("big.rs"), &large_file).unwrap();
+
+        let mut index = mimir_index::RepoIndex::new();
+        index.add(mimir_index::FileEntry {
+            path: "big.rs".to_string(),
+            language: "rust".to_string(),
+            content_hash: "big".to_string(),
+            token_count: 1,
+            exports: vec!["big".to_string()],
+            imports: Vec::new(),
+        });
+
+        let run_id = RunId("20260101-120000-abcdef10".to_string());
+        let packet1 = ContextBuilder::new()
+            .run_id(run_id.clone())
+            .task_card("big")
+            .repo_root(dir.path())
+            .repo_index(Arc::new(index.clone()))
+            .build()
+            .unwrap();
+        let packet2 = ContextBuilder::new()
+            .run_id(run_id)
+            .task_card("big")
+            .repo_root(dir.path())
+            .repo_index(Arc::new(index))
+            .build()
+            .unwrap();
+
+        assert_eq!(packet1.packet_hash, packet2.packet_hash);
+    }
+
+    #[test]
+    fn compression_sets_metadata_and_writes_artifact() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let body = "    let x = 1;\n";
+        let large_file = format!(
+            "pub fn big() {{\n{}\n}}\npub fn small() {{}}\n",
+            body.repeat(800)
+        );
+        std::fs::write(dir.path().join("big.rs"), &large_file).unwrap();
+
+        let mut index = mimir_index::RepoIndex::new();
+        index.add(mimir_index::FileEntry {
+            path: "big.rs".to_string(),
+            language: "rust".to_string(),
+            content_hash: "big".to_string(),
+            token_count: 1,
+            exports: vec!["big".to_string()],
+            imports: Vec::new(),
+        });
+
+        let run_id = RunId("20260101-120000-abcdef11".to_string());
+        let packet = ContextBuilder::new()
+            .run_id(run_id.clone())
+            .task_card("big")
+            .repo_root(dir.path())
+            .repo_index(Arc::new(index))
+            .mimir_root(dir.path().join(".mimir"))
+            .build()
+            .unwrap();
+
+        let item = packet
+            .included
+            .iter()
+            .find(|i| i.path == "big.rs")
+            .expect("big.rs should be included");
+        assert!(
+            item.compression.is_some(),
+            "large file should carry compression metadata"
+        );
+        let comp = item.compression.as_ref().unwrap();
+        assert_eq!(comp.algorithm, "code_skeleton");
+        assert!(comp.compressed_tokens < comp.original_tokens);
+
+        // Verify artifact exists.
+        let artifact_path = dir
+            .path()
+            .join(".mimir/runs")
+            .join(run_id.as_str())
+            .join("artifacts")
+            .join(format!("{}.orig", comp.original_hash));
+        assert!(
+            artifact_path.exists(),
+            "original artifact should be written to disk"
+        );
     }
 }

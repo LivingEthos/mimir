@@ -1,0 +1,10 @@
+[
+  {"id":"cfg-01","tier":"bronze","owner":"routing","mode":"mirror","answer":"north-star"},
+  {"id":"cfg-02","tier":"silver","owner":"billing","mode":"active","answer":"south-bridge"},
+  {"id":"cfg-03","tier":"gold","owner":"search","mode":"active","answer":"east-rail"},
+  {"id":"cfg-04","tier":"platinum","owner":"storage","mode":"mirror","answer":"west-plain"},
+  {"id":"cfg-05","tier":"bronze","owner":"events","mode":"active","answer":"blue-court"},
+  {"id":"cfg-06","tier":"silver","owner":"auth","mode":"mirror","answer":"green-field"},
+  {"id":"cfg-07","tier":"gold","owner":"queue","mode":"active","answer":"red-garden"},
+  {"id":"cfg-08","tier":"platinum","owner":"cache","mode":"mirror","answer":"white-lane"}
+]

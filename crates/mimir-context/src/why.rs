@@ -165,6 +165,7 @@ mod tests {
                 source_hash: "0".repeat(64),
                 trust_level: "trusted".to_string(),
                 editable: false,
+                compression: None,
             }],
             omitted_candidates: vec![OmittedCandidate {
                 schema_version: 1,

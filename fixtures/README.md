@@ -8,6 +8,17 @@ Generated from the Mimir workspace itself.
 mimir eval context --dataset fixtures/context-recall-v1.yaml
 ```
 
+`answer-quality-v2.yaml` is the larger provider-answer fixture set used by:
+
+```bash
+mimir eval answer --dataset fixtures/answer-quality-v2.yaml
+```
+
+It points at small dedicated fixture repositories under `fixtures/repos/` so
+answer-quality runs do not index the full Mimir workspace. Several of those
+repos include large source files to exercise reversible compression in the
+compressed arm.
+
 The legacy `fixture-*.yaml` files remain as readable source cases; the dataset file
 normalizes them into schema-shaped `EvalCase` entries.
 

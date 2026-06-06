@@ -14,6 +14,7 @@ mimir-context = { path = "../mimir-context" }
 mimir-index = { path = "../mimir-index" }
 mimir-providers = { path = "../mimir-providers" }
 mimir-runs = { path = "../mimir-runs" }
+mimir-session = { path = "../mimir-session" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }

@@ -77,6 +77,16 @@ pub struct RecallGuardFlag {
     pub suggestion: Option<String>,
 }
 
+/// Compression metadata for an included item.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressionInfo {
+    pub algorithm: String,
+    pub original_tokens: u32,
+    pub compressed_tokens: u32,
+    pub original_hash: String,
+    pub original_artifact_path: String,
+}
+
 /// An included context item.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IncludedItem {
@@ -88,6 +98,8 @@ pub struct IncludedItem {
     pub source_hash: String,
     pub trust_level: String,
     pub editable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compression: Option<CompressionInfo>,
 }
 
 /// An omitted candidate with reason.
@@ -259,6 +271,10 @@ pub struct EvalResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
     pub ran_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answer_correct: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arm: Option<String>,
 }
 
 /// Metrics emitted by a context eval run.
@@ -280,6 +296,8 @@ pub struct EvalMetrics {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repo_map_refresh_latency_ms: Option<u32>,
     pub e2e_latency_ms: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tokens_in: Option<u32>,
     pub tokens_in_total: u32,
     pub tokens_out_total: u32,
     pub cost_usd_total: f64,
@@ -932,10 +950,31 @@ pub struct TestCard {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResultCard {
     pub schema_version: u32,
-    pub tool_name: String,
-    pub stdout: String,
-    pub stderr: String,
+    pub card_id: String,
+    pub command: String,
+    pub cwd: String,
+    pub safety_class: String,
+    pub timeout_ms: u32,
     pub exit_code: i32,
+    pub duration_ms: u32,
+    pub stdout_preview: String,
+    pub stderr_preview: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdout_artifact_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr_artifact_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdout_original_size_bytes: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr_original_size_bytes: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detected_file_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detected_test_refs: Vec<String>,
+    pub estimated_tokens: u32,
+    pub inclusion_policy: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters_applied: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------

@@ -238,7 +238,7 @@ function verifyHomebrewFormula(rootVersion) {
 
   let placeholders = 0;
   for (const entry of platformPackages.filter((candidate) => candidate.homebrewPlaceholder)) {
-    const expectedUrl = `https://github.com/MisterWonderful/mimir/releases/download/v${rootVersion}/mimir-cli-${entry.rustTarget}.tar.xz`;
+    const expectedUrl = `https://github.com/LivingEthos/mimir/releases/download/v${rootVersion}/mimir-cli-${entry.rustTarget}.tar.xz`;
     const urlNeedle = `url "${expectedUrl}"`;
     const urlIndex = formula.indexOf(urlNeedle);
     if (urlIndex === -1) {

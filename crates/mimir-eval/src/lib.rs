@@ -1,5 +1,7 @@
 //! Eval harness for local, replayable context quality checks.
 
+pub mod answer_eval;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -301,6 +303,7 @@ fn result_from_packet(
             retrieval_latency_ms: Some(elapsed_ms),
             repo_map_refresh_latency_ms,
             e2e_latency_ms: elapsed_ms,
+            tokens_in: None,
             tokens_in_total: packet.estimated_input_tokens,
             tokens_out_total: 0,
             cost_usd_total: 0.0,
@@ -314,6 +317,8 @@ fn result_from_packet(
         packet_id: Some(packet.packet_id.clone()),
         run_id: Some(packet.run_id.clone()),
         ran_at: chrono::Utc::now().to_rfc3339(),
+        answer_correct: None,
+        arm: None,
     }
 }
 
@@ -633,6 +638,7 @@ cases:
                     retrieval_latency_ms: None,
                     repo_map_refresh_latency_ms: None,
                     e2e_latency_ms: 0,
+                    tokens_in: None,
                     tokens_in_total: 1,
                     tokens_out_total: 0,
                     cost_usd_total: 0.0,
@@ -646,6 +652,8 @@ cases:
                 packet_id: None,
                 run_id: None,
                 ran_at: "2026-05-22T00:00:00Z".to_string(),
+                answer_correct: None,
+                arm: None,
             },
             EvalResult {
                 schema_version: 1,
@@ -666,6 +674,7 @@ cases:
                     retrieval_latency_ms: None,
                     repo_map_refresh_latency_ms: None,
                     e2e_latency_ms: 0,
+                    tokens_in: None,
                     tokens_in_total: 1,
                     tokens_out_total: 0,
                     cost_usd_total: 0.0,
@@ -679,6 +688,8 @@ cases:
                 packet_id: None,
                 run_id: None,
                 ran_at: "2026-05-22T00:00:00Z".to_string(),
+                answer_correct: None,
+                arm: None,
             },
         ];
         let summary = summarize_results("test", &results);

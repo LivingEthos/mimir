@@ -173,33 +173,6 @@ button {
   font-size: 0.78rem;
 }
 
-.mode-switch {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(62px, 1fr));
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  overflow: hidden;
-  background: var(--bg);
-}
-
-.mode {
-  height: 34px;
-  border: 0;
-  border-right: 1px solid var(--line);
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.mode:last-child {
-  border-right: 0;
-}
-
-.mode.active {
-  color: var(--accent);
-  background: var(--panel-strong);
-}
-
 .status-strip {
   justify-content: flex-end;
   gap: 8px;
@@ -1355,8 +1328,7 @@ button.artifact-row.active,
     display: grid;
   }
 
-  .workspace-stats,
-  .mode-switch {
+  .workspace-stats {
     width: 100%;
     overflow-x: auto;
   }

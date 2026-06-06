@@ -91,14 +91,14 @@ gh auth status
 git remote -v
 git status --short --branch
 git rev-parse HEAD
-git rev-parse v1.0.0 || true
+git rev-parse v1.1.0 || true
 git push --dry-run origin HEAD
-gh release view v1.0.0 --repo MisterWonderful/mimir || true
+gh release view v1.1.0 --repo LivingEthos/mimir || true
 ```
 
-Proceed only when GitHub push dry-run succeeds for `MisterWonderful/mimir`, the release
+Proceed only when GitHub push dry-run succeeds for `LivingEthos/mimir`, the release
 commit is clean, and CI is green for that exact commit. If a local or remote
-`v1.0.0` tag already exists at another commit, stop and get explicit retagging
+`v1.1.0` tag already exists at another commit, stop and get explicit retagging
 approval before deleting or moving it.
 
 2. Re-run focused release checks immediately before release creation:
@@ -131,18 +131,18 @@ Do not run `npm publish` for these packages.
 
 ```bash
 git push origin HEAD
-git tag -a v1.0.0 -m "Mimir v1.0.0"
-git push origin v1.0.0
+git tag -a v1.1.0 -m "Mimir v1.1.0"
+git push origin v1.1.0
 ```
 
-If `v1.0.0` already exists locally at the wrong commit, do not run the tag
+If `v1.1.0` already exists locally at the wrong commit, do not run the tag
 commands until the release owner has approved the exact retagging plan.
 
 5. Create the GitHub release from the pushed tag and upload the cargo-dist
 archives plus checksum sidecars:
 
 ```bash
-gh release create v1.0.0 \
+gh release create v1.1.0 \
   target/distrib/mimir-cli-aarch64-apple-darwin.tar.xz \
   target/distrib/mimir-cli-aarch64-apple-darwin.tar.xz.sha256 \
   target/distrib/mimir-cli-x86_64-apple-darwin.tar.xz \
@@ -153,15 +153,15 @@ gh release create v1.0.0 \
   target/distrib/mimir-cli-x86_64-unknown-linux-gnu.tar.xz.sha256 \
   target/distrib/mimir-cli-x86_64-pc-windows-msvc.zip \
   target/distrib/mimir-cli-x86_64-pc-windows-msvc.zip.sha256 \
-  --repo MisterWonderful/mimir \
-  --title "Mimir v1.0.0" \
-  --notes-file docs/release-notes-v1.0.0.md
+  --repo LivingEthos/mimir \
+  --title "Mimir v1.1.0" \
+  --notes-file docs/release-notes-v1.1.0.md
 ```
 
 6. Verify public package and release visibility:
 
 ```bash
-gh release view v1.0.0 --repo MisterWonderful/mimir
+gh release view v1.1.0 --repo LivingEthos/mimir
 ```
 
 7. Run Homebrew formula audit/install smoke tests only after the GitHub release

@@ -24,6 +24,7 @@ pub mod committee;
 pub mod diff;
 pub mod override_req;
 pub mod packet;
+pub mod test_runner;
 
 /// Errors from the review system.
 #[derive(Error, Debug, Clone, PartialEq)]

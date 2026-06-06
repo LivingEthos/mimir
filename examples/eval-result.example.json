@@ -17,6 +17,7 @@
     "retrieval_latency_ms": 190,
     "repo_map_refresh_latency_ms": 41,
     "e2e_latency_ms": 730,
+    "tokens_in": 31440,
     "tokens_in_total": 31440,
     "tokens_out_total": 0,
     "cost_usd_total": 0.09432,

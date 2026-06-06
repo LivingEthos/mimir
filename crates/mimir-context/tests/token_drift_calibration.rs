@@ -159,6 +159,8 @@ fn zero_reserve_would_let_a_drifting_packet_exceed_cap() {
         cap_tokens: cap,
         output_reserve_tokens: output_reserve,
         count_drift_reserve_tokens: drift, // exactly enough headroom
+        compression_enabled: false,
+        compress_threshold_tokens: 2048,
     };
     let estimate = good.available();
     assert!(
@@ -173,6 +175,8 @@ fn zero_reserve_would_let_a_drifting_packet_exceed_cap() {
         cap_tokens: cap,
         output_reserve_tokens: output_reserve,
         count_drift_reserve_tokens: 0,
+        compression_enabled: false,
+        compress_threshold_tokens: 2048,
     };
     let estimate_zero = zero.available();
     assert!(

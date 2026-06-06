@@ -75,6 +75,50 @@ Replay does not dispatch to a provider by itself. To make a new provider call fr
 mimir context call .mimir/runs/<run-id>/context_packet.json
 ```
 
+## Compression and Expand Lifecycle
+
+When a candidate's token count exceeds `compress_threshold_tokens` (default 2048), Mimir applies deterministic, rule-based compression instead of omitting it:
+
+- **CodeSkeleton** (Rust/TypeScript/JavaScript/Python) keeps signatures, imports, and doc comments; elides body blocks.
+- **JsonCrush** compacts homogeneous JSON arrays and truncates long strings.
+- **None** — identity pass-through for unknown languages.
+
+If compression achieves ≥25% reduction and the compressed form fits the remaining budget, the packet includes the compressed text and records metadata in `included[].compression`:
+
+```json
+{
+  "algorithm": "code_skeleton",
+  "original_tokens": 5200,
+  "compressed_tokens": 1200,
+  "original_hash": "e4f5a6...e4f5",
+  "original_artifact_path": ".mimir/runs/<run-id>/artifacts/e4f5a6...e4f5.orig"
+}
+```
+
+The original bytes are written to `.mimir/runs/<run-id>/artifacts/<hash>.orig` so they remain retrievable. `source_hash` is still the hash of the original (replay verification is unchanged).
+
+To retrieve the verbatim original:
+
+```bash
+mimir context expand <run-id> <path>
+mimir context expand <run-id> <source-hash>
+```
+
+`expand` verifies the on-disk bytes against the recorded hash and fails closed on mismatch. It respects `--json` for machine-readable output.
+
+Plan and code requests can advertise an experimental `retrieve` tool schema with
+`--enable-retrieve`. The live model-driven retrieval loop is intentionally still
+deferred until replay supports multi-turn provider request artifacts; if a
+provider returns a tool-use response today, Mimir records the response and fails
+closed instead of silently ignoring it.
+
+Compression can be disabled per-run for a fully-verbatim packet:
+
+```bash
+# Not yet exposed on the CLI; disable via policy in code/tests
+TokenPolicy { compression_enabled: false, .. }
+```
+
 ## Common Failures
 
 - `context packet hash mismatch`: packet fields changed after build.
