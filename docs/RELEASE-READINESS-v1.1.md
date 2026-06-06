@@ -8,13 +8,10 @@ tied to green CI / release assets.
 
 - Branch `v1.1/reversible-compression` (tip after F/G/H-groundwork/eval work,
   repair-patch hardening, and `origin/main` reconciliation).
-- `./scripts/validate-production.sh` passed end-to-end on the RCC/eval tip before
-  the final repair-patch hardening commit. Current focused validation after that
-  commit is green: `cargo fmt --all -- --check`, `cargo test -p mimir-edit
-  --all-targets`, `cargo test -p mimir-cli
-  code_fails_closed_when_detected_tests_fail -- --nocapture`, `pnpm --dir
-  apps/studio typecheck`, `pnpm --dir apps/studio lint`, and `cargo clippy -p
-  mimir-edit -p mimir-cli --all-targets -- -D warnings`.
+- `./scripts/validate-production.sh` passes end-to-end on the final reconciled
+  tip (fmt, `clippy --workspace -D warnings`, full test suite, doctests,
+  release build, gateway-boundary, `cargo audit`, `cargo deny`, SDK
+  generate/drift/build, CLI wrapper checks, and validate:examples).
 - v1.0 release machinery untouched by v1.1 (`dist-workspace.toml`,
   `HomebrewFormula/`, `packages/cli/` unchanged).
 - RCC thesis validated on a real provider (MiniMax-M2.7): compression preserves
@@ -68,11 +65,10 @@ tied to green CI / release assets.
 > pre-image context instead of trusting loose line numbers, run-owned artifacts
 > are checked before repair apply, and disabled Studio mode labels were removed.
 >
-> Full `validate-production.sh` was green on the RCC/eval tip, with focused
-> validation green after final repair hardening. v1.0 release machinery remains
-> untouched. Deferred: live retrieve loop (needs multi-turn replay),
-> tree-sitter skeletons. See `docs/HANDOFF-v1.1-followups.md` and
-> `docs/eval-results-rcc-v1.1.md`.
+> Full `validate-production.sh` is green on the final reconciled tip. v1.0
+> release machinery remains untouched. Deferred: live retrieve loop (needs
+> multi-turn replay), tree-sitter skeletons. See
+> `docs/HANDOFF-v1.1-followups.md` and `docs/eval-results-rcc-v1.1.md`.
 
 ## Not done yet
 
