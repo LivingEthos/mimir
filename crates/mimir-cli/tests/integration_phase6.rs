@@ -2396,6 +2396,8 @@ async fn code_fails_closed_when_detected_tests_fail() {
             "mock-model",
             "--base-url",
             &server.uri(),
+            "--max-repair-turns",
+            "0",
             "--json",
         ])
         .output()

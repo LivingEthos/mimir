@@ -3735,6 +3735,42 @@ fn run_code_repair_loop(
         )?;
 
         let files = affected_files(&patch_recipe);
+        if let Err(error) = ensure_run_owned_files_unchanged(ctx.base, run_owned_hashes) {
+            let reason = redacted_message(format!(
+                "repair_run_owned_files_changed_before_apply: {error}"
+            ));
+            turns.push(RepairTurnReport {
+                turn,
+                cost: turn_cost,
+                patch_plan_path: Some(patch_plan_artifact),
+                patch_recipe_path: Some(patch_recipe_artifact),
+                patch_path: Some(patch_artifact),
+                test_result_path: None,
+                test_passed: Some(false),
+                test_exit_code: Some(current_test.exit_code),
+                rejected: Some(reason.clone()),
+            });
+            append_redacted_event(
+                ctx.run_dir,
+                &serde_json::json!({
+                    "event_type": "repair_run_owned_files_changed",
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                    "turn": turn,
+                    "reason": &reason,
+                }),
+            )?;
+            return Ok(repair_outcome(
+                turns,
+                total_cost,
+                reason.clone(),
+                false,
+                "auto_detected".to_string(),
+                None,
+                Some(current_test),
+                Some(reason),
+            ));
+        }
+
         let safety_result = if contains_secret_like_text(&patch_text) {
             Err(anyhow!(
                 "provider repair patch contained secret-like text and was not applied"
@@ -3773,42 +3809,6 @@ fn run_code_repair_loop(
                 ctx.run_dir,
                 &serde_json::json!({
                     "event_type": "repair_patch_rejected",
-                    "timestamp": chrono::Utc::now().to_rfc3339(),
-                    "turn": turn,
-                    "reason": &reason,
-                }),
-            )?;
-            return Ok(repair_outcome(
-                turns,
-                total_cost,
-                reason.clone(),
-                false,
-                "auto_detected".to_string(),
-                None,
-                Some(current_test),
-                Some(reason),
-            ));
-        }
-
-        if let Err(error) = ensure_run_owned_files_unchanged(ctx.base, run_owned_hashes) {
-            let reason = redacted_message(format!(
-                "repair_run_owned_files_changed_before_apply: {error}"
-            ));
-            turns.push(RepairTurnReport {
-                turn,
-                cost: turn_cost,
-                patch_plan_path: Some(patch_plan_artifact),
-                patch_recipe_path: Some(patch_recipe_artifact),
-                patch_path: Some(patch_artifact),
-                test_result_path: None,
-                test_passed: Some(false),
-                test_exit_code: Some(current_test.exit_code),
-                rejected: Some(reason.clone()),
-            });
-            append_redacted_event(
-                ctx.run_dir,
-                &serde_json::json!({
-                    "event_type": "repair_run_owned_files_changed",
                     "timestamp": chrono::Utc::now().to_rfc3339(),
                     "turn": turn,
                     "reason": &reason,
