@@ -1,0 +1,311 @@
+schema_version: 1
+id: answer-quality-v2
+description: |
+  Larger answer-quality fixture set for comparing verbatim and compressed
+  provider answers. Cases use dedicated fixture repos under fixtures/repos and
+  avoid the full Mimir repository.
+cases:
+  - id: aq2-001-rust-label
+    repo_path: fixtures/repos/answer-quality-v2-rust
+    base_commit: synthetic
+    task: "In rust_case_01_marker, what exact label is returned? Answer with only the label."
+    gold_answer: "aurora-ledger"
+    grading: exact_match
+  - id: aq2-002-rust-label
+    repo_path: fixtures/repos/answer-quality-v2-rust
+    base_commit: synthetic
+    task: "Find RUST_CASE_02_LABEL and answer with its value only."
+    gold_answer: "brisk-vector"
+    grading: exact_match
+  - id: aq2-003-rust-label
+    repo_path: fixtures/repos/answer-quality-v2-rust
+    base_commit: synthetic
+    task: "What value does rust_case_03_marker expose?"
+    gold_answer: "cedar-window"
+    grading: contains
+  - id: aq2-004-rust-label
+    repo_path: fixtures/repos/answer-quality-v2-rust
+    base_commit: synthetic
+    task: "Read RUST_CASE_04_LABEL and reply with the label."
+    gold_answer: "delta-harbor"
+    grading: exact_match
+  - id: aq2-005-rust-label
+    repo_path: fixtures/repos/answer-quality-v2-rust
+    base_commit: synthetic
+    task: "Which label is bound to RUST_CASE_05_LABEL?"
+    gold_answer: "ember-index"
+    grading: contains_ci
+  - id: aq2-006-rust-label
+    repo_path: fixtures/repos/answer-quality-v2-rust
+    base_commit: synthetic
+    task: "What string is returned by rust_case_06_marker?"
+    gold_answer: "frost-lattice"
+    grading: exact_match
+  - id: aq2-007-rust-label
+    repo_path: fixtures/repos/answer-quality-v2-rust
+    base_commit: synthetic
+    task: "Answer with the value of RUST_CASE_07_LABEL."
+    gold_answer: "garnet-signal"
+    grading: exact_match
+  - id: aq2-008-rust-label
+    repo_path: fixtures/repos/answer-quality-v2-rust
+    base_commit: synthetic
+    task: "What exact label does rust_case_08_marker use?"
+    gold_answer: "hazel-router"
+    grading: contains
+  - id: aq2-009-rust-label
+    repo_path: fixtures/repos/answer-quality-v2-rust
+    base_commit: synthetic
+    task: "Find the label for RUST_CASE_09_LABEL."
+    gold_answer: "ivory-cache"
+    grading: exact_match
+  - id: aq2-010-rust-label
+    repo_path: fixtures/repos/answer-quality-v2-rust
+    base_commit: synthetic
+    task: "What is the RUST_CASE_10_LABEL string?"
+    gold_answer: "juniper-batch"
+    grading: contains_ci
+  - id: aq2-011-rust-label
+    repo_path: fixtures/repos/answer-quality-v2-rust
+    base_commit: synthetic
+    task: "Return only the value from rust_case_11_marker."
+    gold_answer: "kindle-shard"
+    grading: exact_match
+  - id: aq2-012-rust-label
+    repo_path: fixtures/repos/answer-quality-v2-rust
+    base_commit: synthetic
+    task: "Which value is assigned to RUST_CASE_12_LABEL?"
+    gold_answer: "lagoon-digest"
+    grading: contains
+
+  - id: aq2-013-python-mode
+    repo_path: fixtures/repos/answer-quality-v2-python
+    base_commit: synthetic
+    task: "Use py_case_01_marker and answer with the mode only."
+    gold_answer: "atlas-mode"
+    grading: exact_match
+  - id: aq2-014-python-mode
+    repo_path: fixtures/repos/answer-quality-v2-python
+    base_commit: synthetic
+    task: "What mode belongs to py_case_02_marker?"
+    gold_answer: "beacon-mode"
+    grading: contains
+  - id: aq2-015-python-mode
+    repo_path: fixtures/repos/answer-quality-v2-python
+    base_commit: synthetic
+    task: "Read py_case_03_marker and return the mode."
+    gold_answer: "cobalt-mode"
+    grading: exact_match
+  - id: aq2-016-python-mode
+    repo_path: fixtures/repos/answer-quality-v2-python
+    base_commit: synthetic
+    task: "Which answer is documented for py_case_04?"
+    gold_answer: "drift-mode"
+    grading: contains_ci
+  - id: aq2-017-python-mode
+    repo_path: fixtures/repos/answer-quality-v2-python
+    base_commit: synthetic
+    task: "What does py_case_05_marker return?"
+    gold_answer: "ember-mode"
+    grading: exact_match
+  - id: aq2-018-python-mode
+    repo_path: fixtures/repos/answer-quality-v2-python
+    base_commit: synthetic
+    task: "Return the mode for py_case_06_marker."
+    gold_answer: "fern-mode"
+    grading: exact_match
+  - id: aq2-019-python-mode
+    repo_path: fixtures/repos/answer-quality-v2-python
+    base_commit: synthetic
+    task: "Find py_case_07 answer and reply with it."
+    gold_answer: "glade-mode"
+    grading: contains
+  - id: aq2-020-python-mode
+    repo_path: fixtures/repos/answer-quality-v2-python
+    base_commit: synthetic
+    task: "Which mode is tied to py_case_08_marker?"
+    gold_answer: "harbor-mode"
+    grading: exact_match
+  - id: aq2-021-python-mode
+    repo_path: fixtures/repos/answer-quality-v2-python
+    base_commit: synthetic
+    task: "What is the answer for py_case_09?"
+    gold_answer: "inlet-mode"
+    grading: contains_ci
+  - id: aq2-022-python-mode
+    repo_path: fixtures/repos/answer-quality-v2-python
+    base_commit: synthetic
+    task: "Answer with the py_case_10_marker value only."
+    gold_answer: "jasper-mode"
+    grading: exact_match
+  - id: aq2-023-python-mode
+    repo_path: fixtures/repos/answer-quality-v2-python
+    base_commit: synthetic
+    task: "Read py_case_11_marker and name its mode."
+    gold_answer: "keystone-mode"
+    grading: contains
+  - id: aq2-024-python-mode
+    repo_path: fixtures/repos/answer-quality-v2-python
+    base_commit: synthetic
+    task: "What mode is returned by py_case_12_marker?"
+    gold_answer: "lumen-mode"
+    grading: exact_match
+
+  - id: aq2-025-ts-route
+    repo_path: fixtures/repos/answer-quality-v2-typescript
+    base_commit: synthetic
+    task: "What is the route in TS_CASE_01_ROUTE?"
+    gold_answer: "/alpha/check"
+    grading: exact_match
+  - id: aq2-026-ts-route
+    repo_path: fixtures/repos/answer-quality-v2-typescript
+    base_commit: synthetic
+    task: "Find TS_CASE_02_ROUTE and answer with the path."
+    gold_answer: "/bravo/check"
+    grading: exact_match
+  - id: aq2-027-ts-route
+    repo_path: fixtures/repos/answer-quality-v2-typescript
+    base_commit: synthetic
+    task: "Which route does tsCase03Marker return?"
+    gold_answer: "/charlie/check"
+    grading: contains
+  - id: aq2-028-ts-route
+    repo_path: fixtures/repos/answer-quality-v2-typescript
+    base_commit: synthetic
+    task: "Return only the value of TS_CASE_04_ROUTE."
+    gold_answer: "/delta/check"
+    grading: exact_match
+  - id: aq2-029-ts-route
+    repo_path: fixtures/repos/answer-quality-v2-typescript
+    base_commit: synthetic
+    task: "What path is assigned to TS_CASE_05_ROUTE?"
+    gold_answer: "/echo/check"
+    grading: contains_ci
+  - id: aq2-030-ts-route
+    repo_path: fixtures/repos/answer-quality-v2-typescript
+    base_commit: synthetic
+    task: "Read tsCase06Marker and provide the route."
+    gold_answer: "/foxtrot/check"
+    grading: exact_match
+  - id: aq2-031-ts-route
+    repo_path: fixtures/repos/answer-quality-v2-typescript
+    base_commit: synthetic
+    task: "Which value is exported as TS_CASE_07_ROUTE?"
+    gold_answer: "/golf/check"
+    grading: exact_match
+  - id: aq2-032-ts-route
+    repo_path: fixtures/repos/answer-quality-v2-typescript
+    base_commit: synthetic
+    task: "What route does tsCase08Marker expose?"
+    gold_answer: "/hotel/check"
+    grading: contains
+  - id: aq2-033-ts-route
+    repo_path: fixtures/repos/answer-quality-v2-typescript
+    base_commit: synthetic
+    task: "Answer with TS_CASE_09_ROUTE."
+    gold_answer: "/india/check"
+    grading: exact_match
+  - id: aq2-034-ts-route
+    repo_path: fixtures/repos/answer-quality-v2-typescript
+    base_commit: synthetic
+    task: "Find the route for TS_CASE_10_ROUTE."
+    gold_answer: "/juliet/check"
+    grading: contains_ci
+  - id: aq2-035-ts-route
+    repo_path: fixtures/repos/answer-quality-v2-typescript
+    base_commit: synthetic
+    task: "What does tsCase11Marker return?"
+    gold_answer: "/kilo/check"
+    grading: exact_match
+  - id: aq2-036-ts-route
+    repo_path: fixtures/repos/answer-quality-v2-typescript
+    base_commit: synthetic
+    task: "Which path is held by TS_CASE_12_ROUTE?"
+    gold_answer: "/lima/check"
+    grading: contains
+
+  - id: aq2-037-config-answer
+    repo_path: fixtures/repos/answer-quality-v2-config
+    base_commit: synthetic
+    task: "In service-matrix.json, what is the answer for cfg-01?"
+    gold_answer: "north-star"
+    grading: exact_match
+  - id: aq2-038-config-answer
+    repo_path: fixtures/repos/answer-quality-v2-config
+    base_commit: synthetic
+    task: "In service-matrix.json, which answer belongs to cfg-02?"
+    gold_answer: "south-bridge"
+    grading: contains
+  - id: aq2-039-config-answer
+    repo_path: fixtures/repos/answer-quality-v2-config
+    base_commit: synthetic
+    task: "Return the cfg-03 answer from the service matrix."
+    gold_answer: "east-rail"
+    grading: exact_match
+  - id: aq2-040-config-answer
+    repo_path: fixtures/repos/answer-quality-v2-config
+    base_commit: synthetic
+    task: "What answer is set for cfg-04?"
+    gold_answer: "west-plain"
+    grading: contains_ci
+  - id: aq2-041-config-answer
+    repo_path: fixtures/repos/answer-quality-v2-config
+    base_commit: synthetic
+    task: "Find cfg-05 in service-matrix.json and provide the answer."
+    gold_answer: "blue-court"
+    grading: exact_match
+  - id: aq2-042-config-answer
+    repo_path: fixtures/repos/answer-quality-v2-config
+    base_commit: synthetic
+    task: "Which answer belongs to cfg-06?"
+    gold_answer: "green-field"
+    grading: exact_match
+  - id: aq2-043-config-answer
+    repo_path: fixtures/repos/answer-quality-v2-config
+    base_commit: synthetic
+    task: "What is the cfg-07 answer?"
+    gold_answer: "red-garden"
+    grading: contains
+  - id: aq2-044-config-answer
+    repo_path: fixtures/repos/answer-quality-v2-config
+    base_commit: synthetic
+    task: "Read cfg-08 and answer with its answer value."
+    gold_answer: "white-lane"
+    grading: exact_match
+
+  - id: aq2-045-codegen-rust
+    repo_path: fixtures/repos/answer-quality-v2-small
+    base_commit: synthetic
+    task: "Write only a Rust function named double that doubles an i32."
+    gold_answer: "fn double(n: i32) -> i32 { n * 2 }"
+    grading: exact_match
+  - id: aq2-046-codegen-python
+    repo_path: fixtures/repos/answer-quality-v2-small
+    base_commit: synthetic
+    task: "Write a Python function body line that returns value.strip()."
+    gold_answer: "return value.strip()"
+    grading: contains
+  - id: aq2-047-format-key
+    repo_path: fixtures/repos/answer-quality-v2-small
+    base_commit: synthetic
+    task: "What key names the schema version in the answer-quality YAML?"
+    gold_answer: "schema_version"
+    grading: exact_match
+  - id: aq2-048-readme-fact
+    repo_path: fixtures/repos/answer-quality-v2-small
+    base_commit: synthetic
+    task: "According to the README, what is the smoke color?"
+    gold_answer: "teal"
+    grading: exact_match
+  - id: aq2-049-readme-fact
+    repo_path: fixtures/repos/answer-quality-v2-small
+    base_commit: synthetic
+    task: "According to the README, what is the release channel?"
+    gold_answer: "canary"
+    grading: contains_ci
+  - id: aq2-050-readme-fact
+    repo_path: fixtures/repos/answer-quality-v2-small
+    base_commit: synthetic
+    task: "According to the README, what checksum spelling is preferred?"
+    gold_answer: "sha256"
+    grading: exact_match
